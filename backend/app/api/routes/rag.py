@@ -1,0 +1,30 @@
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user, get_dashscope_client, get_milvus_client
+from app.db.session import get_db
+from app.models.user import User
+from app.schemas.rag import RagAskRequest
+from app.services.rag_answer_service import answer_question
+
+
+router = APIRouter(tags=["rag"])
+
+
+@router.post("/api/app/rag/ask")
+def app_ask_rag(
+    payload: RagAskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    dashscope_client=Depends(get_dashscope_client),
+    milvus_client=Depends(get_milvus_client),
+) -> dict[str, Any]:
+    return answer_question(
+        db,
+        user=current_user,
+        question=payload.question,
+        dashscope_client=dashscope_client,
+        milvus_client=milvus_client,
+    )

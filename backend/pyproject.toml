@@ -1,0 +1,36 @@
+[project]
+name = "weview-work4-backend"
+version = "0.1.0"
+description = "FastAPI backend for the WeView work4 MVP."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "alembic>=1.17,<2",
+  "argon2-cffi>=25.1,<26",
+  "fastapi>=0.116,<0.117",
+  "PyJWT>=2.10,<3",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "pymilvus>=2.5,<3",
+  "PyMySQL>=1.1,<2",
+  "SQLAlchemy>=2.0,<3",
+  "uvicorn[standard]>=0.35,<0.36",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<0.29",
+  "pytest>=8.4,<9",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["alembic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

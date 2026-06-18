@@ -1,682 +1,682 @@
-# 企业话术智能检索与统一培训管理系统 MVP Implementation Plan
+# 企业话术智能检索与统一培训管理系统 MVP 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking. This plan intentionally contains no implementation code.
+> **给 AI 开发者的说明：** 按任务逐项执行本计划。建议使用 superpowers:subagent-driven-development 或 superpowers:executing-plans 逐任务实施。所有步骤使用复选框跟踪。本计划故意不包含任何实现代码。
 
-**Goal:** Build the MVP described by `memory-bank/design-document.md` using the stack and constraints in `memory-bank/tech-stack.md`.
+**目标：** 基于 `memory-bank/design-document.md` 和 `memory-bank/tech-stack.md`，完成企业话术智能检索与统一培训管理系统 MVP。
 
-**Architecture:** Use one Vue 3 SPA for employee and admin pages, one FastAPI monolith for REST APIs and RAG orchestration, MySQL as the authoritative data source, Milvus as the vector index, and DashScope as the model provider. Keep permissions, content versions, index status, and RAG source consistency inside the backend service layer.
+**架构：** 使用一个 Vue 3 SPA 承载员工端和后台端；使用一个 FastAPI 单体后端承载 REST API 和 RAG 编排；MySQL 作为唯一权威数据源；Milvus 作为向量索引；DashScope 作为模型服务。权限、内容版本、索引状态和 RAG 来源一致性必须在后端服务层内保证。
 
-**Tech Stack:** Vue 3, TypeScript, Vite, Vue Router, Pinia, Axios, Element Plus, Python 3.13.x, FastAPI, Pydantic v2, SQLAlchemy 2.x, Alembic, PyMySQL, MySQL 8.4 LTS, Milvus Standalone, PyMilvus, DashScope, pytest, Vitest, Playwright.
+**技术栈：** Vue 3、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Python 3.13.x、FastAPI、Pydantic v2、SQLAlchemy 2.x、Alembic、PyMySQL、MySQL 8.4 LTS、Milvus Standalone、PyMilvus、DashScope、pytest、Vitest、Playwright。
 
 ---
 
-## Plan Rules
+## 计划规则
 
-- Do not write implementation code in this plan.
-- Every implementation step below includes a validation test.
-- Use automated tests whenever practical.
-- Use fake DashScope and fake Milvus clients for unit and API tests.
-- Do not call real DashScope in normal automated tests.
-- Do not put secrets in repository files.
-- Do not introduce LangChain, LangGraph, Celery, Redis, Kubernetes, microservices, or object storage in MVP.
-- Before writing any code, read `memory-bank/architecture.md` and `memory-bank/design-document.md` completely.
-- After each major milestone, update `memory-bank/architecture.md` if architecture, data flow, or implementation boundary changes.
+- 本计划不写任何实现代码。
+- 下面每一个实施步骤都必须包含验证测试。
+- 只要可行，优先使用自动化测试。
+- 单元测试和 API 测试中使用假的 DashScope 客户端和假的 Milvus 客户端。
+- 常规自动化测试不得调用真实 DashScope。
+- 不得把密钥写入仓库文件。
+- MVP 阶段不得引入 LangChain、LangGraph、Celery、Redis、Kubernetes、微服务或对象存储。
+- 写任何代码前，必须完整阅读 `memory-bank/architecture.md` 和 `memory-bank/design-document.md`。
+- 每完成一个重大里程碑后，如果架构、数据流或实现边界发生变化，必须更新 `memory-bank/architecture.md`。
 
-## Expected Repository Shape
+## 预期仓库结构
 
-- `backend/`: FastAPI application, tests, migrations, service layer, integrations.
-- `frontend/`: Vue 3 application, tests, routes, stores, pages, API clients.
-- `infra/`: local Milvus, MySQL, and later Nginx deployment assets.
-- `memory-bank/`: architecture and product context.
-- `memory-bank/implementation-plan.md`: this implementation plan.
+- `backend/`：FastAPI 应用、测试、迁移、服务层、外部集成。
+- `frontend/`：Vue 3 应用、测试、路由、状态、页面、API 客户端。
+- `infra/`：本地 Milvus、MySQL 以及后续 Nginx 部署配置。
+- `memory-bank/`：架构、产品和实施上下文。
+- `memory-bank/implementation-plan.md`：本实施计划。
 
-## Phase 0: Preparation And Guardrails
+## 阶段 0：准备与护栏
 
-### Task 1: Confirm Context And Protect Existing Work
+### 任务 1：确认上下文并保护现有工作
 
-- [ ] Step 1: Read `AGENTS.md`, `memory-bank/architecture.md`, `memory-bank/design-document.md`, and `memory-bank/tech-stack.md` from start to finish.
-  - Validation test: Write a brief implementation note listing the five non-negotiable constraints: MySQL authority, Milvus index-only role, backend permission enforcement, no model free-answer on miss, and no complex middleware in MVP.
+- [ ] 步骤 1：从头到尾阅读 `AGENTS.md`、`memory-bank/architecture.md`、`memory-bank/design-document.md` 和 `memory-bank/tech-stack.md`。
+  - 验证测试：写一份简短实施备注，列出五条不可妥协约束：MySQL 是权威数据源、Milvus 只做索引、权限以后端为准、未命中时模型不得自由回答、MVP 不引入复杂中间件。
 
-- [ ] Step 2: Inspect the current Git worktree and identify tracked changes, untracked files, and files unrelated to the implementation.
-  - Validation test: Confirm the implementation note lists which files are safe to modify and which existing untracked files must not be touched unless they are part of the current task.
+- [ ] 步骤 2：检查当前 Git 工作区，识别已跟踪变更、未跟踪文件，以及与实施无关的文件。
+  - 验证测试：确认实施备注中明确列出哪些文件可以修改，哪些现有未跟踪文件不得触碰，除非它们属于当前任务。
 
-- [ ] Step 3: Create a milestone checklist for backend, frontend, RAG, E2E, and deployment documentation.
-  - Validation test: Confirm every milestone maps to at least one MVP acceptance criterion from `memory-bank/design-document.md`.
+- [ ] 步骤 3：创建后端、前端、RAG、端到端和部署文档的里程碑清单。
+  - 验证测试：确认每个里程碑至少映射到 `memory-bank/design-document.md` 中的一条 MVP 验收标准。
 
-### Task 2: Establish Test Strategy Before Scaffolding
+### 任务 2：先建立测试策略，再开始脚手架
 
-- [ ] Step 1: Define backend test categories: unit tests for services, API tests for routes, migration checks, and integration-style tests using fake external clients.
-  - Validation test: Confirm the test strategy explicitly covers login, permission filtering, content publishing, versioning, index failure, AI miss handling, and source consistency.
+- [ ] 步骤 1：定义后端测试类别：服务单元测试、路由 API 测试、迁移检查，以及使用假外部客户端的集成风格测试。
+  - 验证测试：确认测试策略明确覆盖登录、权限过滤、内容发布、版本管理、索引失败、AI 未命中处理和来源一致性。
 
-- [ ] Step 2: Define frontend test categories: route guard tests, store tests, API error handling tests, page state tests, and Playwright smoke tests.
-  - Validation test: Confirm the test strategy explicitly covers employee login, admin login, restricted admin route access, general-user visibility, full-user visibility, and AI miss UI.
+- [ ] 步骤 2：定义前端测试类别：路由守卫测试、状态仓库测试、API 错误处理测试、页面状态测试和 Playwright 冒烟测试。
+  - 验证测试：确认测试策略明确覆盖员工登录、管理员登录、后台路由限制、通用用户可见性、完整权限用户可见性和 AI 未命中界面。
 
-- [ ] Step 3: Define external-service test boundaries for DashScope and Milvus.
-  - Validation test: Confirm the plan states that automated tests use fake clients and that a separate manual smoke check is required before real model calls are considered verified.
+- [ ] 步骤 3：定义 DashScope 和 Milvus 的外部服务测试边界。
+  - 验证测试：确认计划明确说明自动化测试使用假客户端，并且真实模型调用只通过单独的手动冒烟检查验证。
 
-## Phase 1: Project Scaffold
+## 阶段 1：项目脚手架
 
-### Task 3: Create Backend Skeleton
+### 任务 3：创建后端骨架
 
-- [ ] Step 1: Create the backend project directory, package metadata, application package, and empty test structure.
-  - Validation test: Run backend test discovery and confirm the test runner starts successfully without importing application modules from the wrong path.
+- [ ] 步骤 1：创建后端项目目录、包元数据、应用包和空测试结构。
+  - 验证测试：运行后端测试发现流程，确认测试运行器能正常启动，且不会从错误路径导入应用模块。
 
-- [ ] Step 2: Add a backend health-check behavior at `GET /health`.
-  - Validation test: Add an API test requiring the health endpoint to return an OK status and a stable service identifier; run it before implementation to confirm failure, then after implementation to confirm pass.
+- [ ] 步骤 2：添加 `GET /health` 后端健康检查行为。
+  - 验证测试：添加 API 测试，要求健康检查返回成功状态和稳定的服务标识；实现前运行确认失败，实现后运行确认通过。
 
-- [ ] Step 3: Add backend configuration loading for environment variables without requiring real secrets during tests.
-  - Validation test: Add a configuration test requiring test defaults to load without real database, Milvus, DashScope, or JWT secrets.
+- [ ] 步骤 3：添加后端环境变量配置加载能力，测试环境不得要求真实密钥。
+  - 验证测试：添加配置测试，要求测试默认值在没有真实数据库、Milvus、DashScope 或 JWT 密钥时也能加载。
 
-- [ ] Step 4: Add centralized backend error response behavior.
-  - Validation test: Add an API test requiring unknown routes and controlled application errors to return consistent JSON error shapes without leaking stack traces.
+- [ ] 步骤 4：添加统一后端错误响应行为。
+  - 验证测试：添加 API 测试，要求未知路由和受控应用错误返回一致的 JSON 错误结构，且不泄露堆栈信息。
 
-### Task 4: Create Frontend Skeleton
+### 任务 4：创建前端骨架
 
-- [ ] Step 1: Create the Vue 3, TypeScript, and Vite frontend project structure.
-  - Validation test: Run the frontend unit test runner and confirm it can discover a minimal placeholder test without requiring a browser.
+- [ ] 步骤 1：创建 Vue 3、TypeScript 和 Vite 前端项目结构。
+  - 验证测试：运行前端单元测试运行器，确认它能发现一个最小示例测试，且不需要浏览器即可运行。
 
-- [ ] Step 2: Add the frontend application shell with route areas for login, employee app, and admin app.
-  - Validation test: Add a route test requiring `/login`, `/app`, and `/admin` to resolve to distinct route records.
+- [ ] 步骤 2：添加前端应用壳，包含登录区、员工端区和后台端区。
+  - 验证测试：添加路由测试，要求 `/login`、`/app` 和 `/admin` 解析到不同路由记录。
 
-- [ ] Step 3: Add global API client setup with base URL configuration.
-  - Validation test: Add a unit test requiring the API client to use the configured API base URL and to expose a consistent error path for failed requests.
+- [ ] 步骤 3：添加带基础 URL 配置的全局 API 客户端。
+  - 验证测试：添加单元测试，要求 API 客户端使用配置的 API 基础 URL，并为失败请求暴露一致错误路径。
 
-- [ ] Step 4: Add baseline frontend styling and layout constraints for mobile H5 and PC admin pages.
-  - Validation test: Add a component rendering test requiring the application shell to render without horizontal overflow at a mobile viewport width and a desktop viewport width.
+- [ ] 步骤 4：添加面向移动 H5 和 PC 后台页面的基础样式与布局约束。
+  - 验证测试：添加组件渲染测试，要求应用壳在移动端视口宽度和桌面端视口宽度下都不会产生横向溢出。
 
-### Task 5: Create Local Development Infrastructure
+### 任务 5：创建本地开发基础设施
 
-- [ ] Step 1: Create local infrastructure documentation for MySQL and Milvus startup.
-  - Validation test: Confirm a new developer can identify the required MySQL host, database name, Milvus host, Milvus port, and where to place local secrets without reading source code.
+- [ ] 步骤 1：创建 MySQL 和 Milvus 本地启动文档。
+  - 验证测试：确认新开发者无需阅读源代码，就能从文档中识别所需 MySQL 主机、数据库名、Milvus 主机、Milvus 端口，以及本地密钥放置位置。
 
-- [ ] Step 2: Create `.env.example` with all required backend and frontend environment variable names and safe placeholder values.
-  - Validation test: Add a repository check that confirms `.env.example` contains no real API key, password, token, or private host.
+- [ ] 步骤 2：创建 `.env.example`，包含所有必需的后端和前端环境变量名，并使用安全示例值。
+  - 验证测试：添加仓库检查，确认 `.env.example` 不包含真实 API Key、密码、token 或私有主机。
 
-- [ ] Step 3: Add local startup documentation for backend and frontend.
-  - Validation test: Confirm the documentation lists separate startup checks for backend health, frontend route load, MySQL connectivity, and Milvus connectivity.
+- [ ] 步骤 3：添加后端和前端本地启动文档。
+  - 验证测试：确认文档分别列出后端健康检查、前端路由加载、MySQL 连通性和 Milvus 连通性的启动检查。
 
-## Phase 2: Backend Data Model And Migrations
+## 阶段 2：后端数据模型与迁移
 
-### Task 6: Establish Database Connection And Migration Flow
+### 任务 6：建立数据库连接和迁移流程
 
-- [ ] Step 1: Configure SQLAlchemy database session management for MySQL.
-  - Validation test: Add a backend test requiring the application to create and close a database session without leaking connections when using a test database URL.
+- [ ] 步骤 1：配置面向 MySQL 的 SQLAlchemy 数据库会话管理。
+  - 验证测试：添加后端测试，要求应用在使用测试数据库 URL 时能够创建并关闭数据库会话，且不泄露连接。
 
-- [ ] Step 2: Configure Alembic migration discovery.
-  - Validation test: Add a migration check requiring a fresh test database to apply all migrations from empty state without manual SQL.
+- [ ] 步骤 2：配置 Alembic 迁移发现。
+  - 验证测试：添加迁移检查，要求一个全新的测试数据库能从空状态应用全部迁移，不需要手写 SQL。
 
-- [ ] Step 3: Add a migration rollback verification approach for local development.
-  - Validation test: Confirm a migration test can upgrade to the latest migration and downgrade one revision without leaving orphaned migration metadata.
+- [ ] 步骤 3：添加本地开发用的迁移回滚验证方式。
+  - 验证测试：确认迁移测试可以升级到最新迁移，并回滚一个版本，且不会留下孤立迁移元数据。
 
-### Task 7: Implement User And Permission Tables
+### 任务 7：实现用户和权限表
 
-- [ ] Step 1: Define the user table with username, password hash, display name, account type, content level, active flag, and timestamps.
-  - Validation test: Add a migration test requiring the user table to contain all required fields and enforce unique usernames.
+- [ ] 步骤 1：定义用户表，字段包含用户名、密码哈希、展示名、账号类型、内容权限级别、启用状态和时间戳。
+  - 验证测试：添加迁移测试，要求用户表包含所有必需字段，并强制用户名唯一。
 
-- [ ] Step 2: Define allowed account types and content levels at the domain layer.
-  - Validation test: Add a domain test requiring invalid account types and invalid content levels to be rejected before database write.
+- [ ] 步骤 2：在领域层定义允许的账号类型和内容权限级别。
+  - 验证测试：添加领域测试，要求无效账号类型和无效内容权限级别在写入数据库前被拒绝。
 
-- [ ] Step 3: Add seed guidance for one initial admin account without storing a real password in the repository.
-  - Validation test: Confirm the seed documentation requires password input through environment or an operator command, not a committed file.
+- [ ] 步骤 3：添加一个初始管理员账号的种子说明，但不得在仓库中保存真实密码。
+  - 验证测试：确认种子说明要求通过环境变量或运维命令输入密码，而不是提交文件。
 
-### Task 8: Implement Content, Version, Chunk, And Vector Index Tables
+### 任务 8：实现内容、版本、切片和向量索引表
 
-- [ ] Step 1: Define the content table for type, title, category, permission level, status, current version, creator, and timestamps.
-  - Validation test: Add a migration test requiring content type, permission level, and status to be constrained to allowed values.
+- [ ] 步骤 1：定义内容表，字段包含内容类型、标题、分类、权限级别、状态、当前版本、创建人和时间戳。
+  - 验证测试：添加迁移测试，要求内容类型、权限级别和状态都受允许值约束。
 
-- [ ] Step 2: Define the content version table for version number, title snapshot, summary, body, structured payload, publish time, effective time, expiry time, creator, and creation time.
-  - Validation test: Add a database test requiring multiple versions to belong to one content item and requiring version numbers to remain unique per content item.
+- [ ] 步骤 2：定义内容版本表，字段包含版本号、标题快照、摘要、正文、结构化载荷、发布时间、生效时间、失效时间、创建人和创建时间。
+  - 验证测试：添加数据库测试，要求一个内容项可以拥有多个版本，并要求同一内容项下版本号唯一。
 
-- [ ] Step 3: Define the content chunk table for chunk type, text, order, token estimate, content hash, permission level, active flag, and timestamps.
-  - Validation test: Add a database test requiring chunks to reference both a content item and a content version.
+- [ ] 步骤 3：定义内容切片表，字段包含切片类型、文本、排序、token 估算、内容哈希、权限级别、启用状态和时间戳。
+  - 验证测试：添加数据库测试，要求切片同时引用内容项和内容版本。
 
-- [ ] Step 4: Define the vector index record table for Milvus collection, Milvus primary key, embedding model, embedding dimension, content hash, indexed time, and active flag.
-  - Validation test: Add a database test requiring each active vector index record to reference an existing chunk.
+- [ ] 步骤 4：定义向量索引记录表，字段包含 Milvus collection、Milvus 主键、embedding 模型、embedding 维度、内容哈希、索引时间和启用状态。
+  - 验证测试：添加数据库测试，要求每条启用中的向量索引记录都引用一个存在的切片。
 
-### Task 9: Implement Quiz, Missed Question, And Optional Conversation Tables
+### 任务 9：实现测验、未命中问题和可选对话表
 
-- [ ] Step 1: Define the quiz question table with question, options, answer, explanation, related content, permission level, status, and timestamps.
-  - Validation test: Add a database test requiring quiz questions to be filterable by permission level and status.
+- [ ] 步骤 1：定义测验题表，字段包含题干、选项、答案、解析、关联内容、权限级别、状态和时间戳。
+  - 验证测试：添加数据库测试，要求测验题可按权限级别和状态过滤。
 
-- [ ] Step 2: Confirm no quiz answer record table is created.
-  - Validation test: Add a migration inspection test requiring no table exists for persisted quiz attempts, quiz scores, personal ranking, or answer history.
+- [ ] 步骤 2：确认不创建测验答题记录表。
+  - 验证测试：添加迁移检查测试，要求不存在持久化测验尝试、测验分数、个人排行或答题历史的表。
 
-- [ ] Step 3: Define the missed question table with question text, user, account type, content level, asked time, status, and handled time.
-  - Validation test: Add a database test requiring a missed question to preserve the user permission snapshot at ask time.
+- [ ] 步骤 3：定义未命中问题表，字段包含问题文本、用户、账号类型、内容权限级别、提问时间、状态和处理时间。
+  - 验证测试：添加数据库测试，要求未命中问题保留提问时的用户权限快照。
 
-- [ ] Step 4: Decide whether conversation persistence is included in MVP implementation.
-  - Validation test: Confirm the decision is recorded in `memory-bank/architecture.md` and that tests match the chosen scope: either no conversation tables or conversation tables with source records.
+- [ ] 步骤 4：决定 MVP 是否包含对话持久化。
+  - 验证测试：确认该决策记录在 `memory-bank/architecture.md` 中，并且测试与所选范围一致：要么没有对话表，要么存在对话表和来源记录。
 
-## Phase 3: Authentication And Authorization
+## 阶段 3：认证与授权
 
-### Task 10: Implement Password Security And Login
+### 任务 10：实现密码安全和登录
 
-- [ ] Step 1: Add password hashing and password verification behavior.
-  - Validation test: Add a security test requiring stored password values to differ from raw passwords and requiring the raw password to verify successfully.
+- [ ] 步骤 1：添加密码哈希和密码校验行为。
+  - 验证测试：添加安全测试，要求存储的密码值不同于原始密码，并且原始密码能够校验成功。
 
-- [ ] Step 2: Add login API behavior for username and password.
-  - Validation test: Add an API test requiring valid credentials to return user identity, account type, content level, and access token.
+- [ ] 步骤 2：添加用户名和密码登录 API 行为。
+  - 验证测试：添加 API 测试，要求有效凭据返回用户身份、账号类型、内容权限级别和访问令牌。
 
-- [ ] Step 3: Add failed-login behavior.
-  - Validation test: Add an API test requiring wrong password, disabled account, and unknown username to fail without revealing which field was wrong.
+- [ ] 步骤 3：添加登录失败行为。
+  - 验证测试：添加 API 测试，要求错误密码、禁用账号和未知用户名均失败，且不暴露到底是哪一项错误。
 
-- [ ] Step 4: Add token expiration behavior.
-  - Validation test: Add a token test requiring expired tokens to be rejected and valid tokens to resolve the expected user.
+- [ ] 步骤 4：添加令牌过期行为。
+  - 验证测试：添加令牌测试，要求过期令牌被拒绝，有效令牌能解析出预期用户。
 
-### Task 11: Implement Backend Permission Dependencies
+### 任务 11：实现后端权限依赖
 
-- [ ] Step 1: Add a current-user dependency for protected APIs.
-  - Validation test: Add an API test requiring unauthenticated calls to protected endpoints to fail with an authentication error.
+- [ ] 步骤 1：为受保护 API 添加当前用户依赖。
+  - 验证测试：添加 API 测试，要求未认证访问受保护接口时返回认证错误。
 
-- [ ] Step 2: Add an admin-only dependency.
-  - Validation test: Add an API test requiring `full_user` and `general_user` accounts to be rejected from admin routes while `admin` succeeds.
+- [ ] 步骤 2：添加仅管理员可访问的依赖。
+  - 验证测试：添加 API 测试，要求 `full_user` 和 `general_user` 访问后台路由被拒绝，`admin` 可以访问。
 
-- [ ] Step 3: Add content-level filtering helpers.
-  - Validation test: Add a service test requiring `general_user` filters to return only general content and `full_user` filters to return general plus full content.
+- [ ] 步骤 3：添加内容级别过滤辅助能力。
+  - 验证测试：添加服务测试，要求 `general_user` 过滤后只返回通用内容，`full_user` 过滤后返回通用和全量内容。
 
-- [ ] Step 4: Add a no-leak permission error rule.
-  - Validation test: Add an API test requiring unauthorized content access to return an error without content title, body, source, or update time.
+- [ ] 步骤 4：添加无泄露权限错误规则。
+  - 验证测试：添加 API 测试，要求无权限访问内容时返回错误，且不包含内容标题、正文、来源或更新时间。
 
-## Phase 4: Backend Content Management
+## 阶段 4：后端内容管理
 
-### Task 12: Implement Admin Content Draft Creation
+### 任务 12：实现管理员创建内容草稿
 
-- [ ] Step 1: Add admin API behavior for creating content drafts.
-  - Validation test: Add an API test requiring an admin to create draft content with type, title, category, permission level, and body fields.
+- [ ] 步骤 1：添加管理员创建内容草稿的 API 行为。
+  - 验证测试：添加 API 测试，要求管理员能用类型、标题、分类、权限级别和正文创建草稿内容。
 
-- [ ] Step 2: Reject non-admin draft creation.
-  - Validation test: Add an API test requiring `full_user` and `general_user` draft creation attempts to fail.
+- [ ] 步骤 2：拒绝非管理员创建草稿。
+  - 验证测试：添加 API 测试，要求 `full_user` 和 `general_user` 创建草稿的尝试失败。
 
-- [ ] Step 3: Validate content type-specific required fields.
-  - Validation test: Add API tests requiring standard script items to include scenario fields and latest must-read entries to include update details.
+- [ ] 步骤 3：校验不同内容类型的必填字段。
+  - 验证测试：添加 API 测试，要求标准化话术条目包含场景字段，最新必读包含更新详情。
 
-- [ ] Step 4: Ensure drafts are hidden from employee APIs.
-  - Validation test: Add API tests requiring draft content to be absent from employee lists and details.
+- [ ] 步骤 4：确保草稿在员工 API 中不可见。
+  - 验证测试：添加 API 测试，要求草稿内容不出现在员工列表和详情中。
 
-### Task 13: Implement Draft Editing And Listing
+### 任务 13：实现草稿编辑和列表
 
-- [ ] Step 1: Add admin API behavior for listing content with filters by type, status, permission level, and category.
-  - Validation test: Add an API test requiring each filter to narrow results correctly and requiring pagination metadata.
+- [ ] 步骤 1：添加管理员内容列表 API 行为，支持按类型、状态、权限级别和分类筛选。
+  - 验证测试：添加 API 测试，要求每个筛选项都能正确缩小结果范围，并返回分页元数据。
 
-- [ ] Step 2: Add admin API behavior for editing draft content.
-  - Validation test: Add an API test requiring draft edits to update fields without creating a published version.
+- [ ] 步骤 2：添加管理员编辑草稿内容的 API 行为。
+  - 验证测试：添加 API 测试，要求草稿编辑能更新字段，但不会创建已发布版本。
 
-- [ ] Step 3: Prevent unsafe edits to historical versions.
-  - Validation test: Add a service test requiring historical version snapshots to remain unchanged after current content edits.
+- [ ] 步骤 3：防止历史版本被不安全修改。
+  - 验证测试：添加服务测试，要求当前内容编辑后，历史版本快照保持不变。
 
-- [ ] Step 4: Add admin content detail behavior.
-  - Validation test: Add an API test requiring content detail to include current status, current version reference, index status, and editable fields.
+- [ ] 步骤 4：添加管理员内容详情行为。
+  - 验证测试：添加 API 测试，要求内容详情包含当前状态、当前版本引用、索引状态和可编辑字段。
 
-### Task 14: Implement Publish And Versioning
+### 任务 14：实现发布和版本管理
 
-- [ ] Step 1: Add publish behavior that creates a new content version.
-  - Validation test: Add a service test requiring the first publish to create version number one and mark the content as published.
+- [ ] 步骤 1：添加发布行为，发布时创建新的内容版本。
+  - 验证测试：添加服务测试，要求首次发布创建版本号一，并将内容标记为已发布。
 
-- [ ] Step 2: Add republish behavior for existing published content.
-  - Validation test: Add a service test requiring republish to create the next version number and keep older versions available only as history.
+- [ ] 步骤 2：添加已发布内容的再次发布行为。
+  - 验证测试：添加服务测试，要求再次发布创建下一个版本号，并且旧版本只作为历史版本保留。
 
-- [ ] Step 3: Set publish time as the initial effective time.
-  - Validation test: Add a service test requiring published time and effective time to be populated consistently for MVP.
+- [ ] 步骤 3：将发布时间设置为 MVP 阶段的初始生效时间。
+  - 验证测试：添加服务测试，要求发布时间和生效时间按 MVP 规则一致填充。
 
-- [ ] Step 4: Ensure historical versions do not appear in current employee content APIs.
-  - Validation test: Add an API test requiring only the latest current version to appear in employee list and detail responses.
+- [ ] 步骤 4：确保历史版本不出现在当前员工内容 API 中。
+  - 验证测试：添加 API 测试，要求员工列表和详情响应中只出现最新当前版本。
 
-### Task 15: Implement Offline And History Behavior
+### 任务 15：实现下线和历史行为
 
-- [ ] Step 1: Add admin API behavior for taking content offline.
-  - Validation test: Add an API test requiring offline content to disappear from employee APIs.
+- [ ] 步骤 1：添加管理员下线内容的 API 行为。
+  - 验证测试：添加 API 测试，要求下线内容从员工 API 中消失。
 
-- [ ] Step 2: Ensure offline content is excluded from AI candidate retrieval.
-  - Validation test: Add a service test requiring offline content chunks to be excluded before Milvus search or filtered from candidate results.
+- [ ] 步骤 2：确保下线内容不参与 AI 候选检索。
+  - 验证测试：添加服务测试，要求下线内容切片在 Milvus 检索前被排除，或在候选结果中被过滤。
 
-- [ ] Step 3: Add admin history listing.
-  - Validation test: Add an API test requiring admins to view historical versions for a content item.
+- [ ] 步骤 3：添加管理员历史版本列表。
+  - 验证测试：添加 API 测试，要求管理员能查看某个内容项的历史版本。
 
-- [ ] Step 4: Reject non-admin history access.
-  - Validation test: Add an API test requiring `full_user` and `general_user` accounts to be denied historical version access.
+- [ ] 步骤 4：拒绝非管理员访问历史版本。
+  - 验证测试：添加 API 测试，要求 `full_user` 和 `general_user` 访问历史版本接口被拒绝。
 
-## Phase 5: Backend Employee Content APIs
+## 阶段 5：后端员工内容 API
 
-### Task 16: Implement Latest Must-Read APIs
+### 任务 16：实现最新必读 API
 
-- [ ] Step 1: Add employee API behavior for must-read list sorted by publish time descending.
-  - Validation test: Add an API test requiring published must-read entries to appear newest first.
+- [ ] 步骤 1：添加员工端最新必读列表 API，按发布时间倒序排列。
+  - 验证测试：添加 API 测试，要求已发布的最新必读按最新优先返回。
 
-- [ ] Step 2: Apply permission filtering to must-read list.
-  - Validation test: Add API tests requiring general users to see only general entries and full users to see general plus full entries.
+- [ ] 步骤 2：对最新必读列表应用权限过滤。
+  - 验证测试：添加 API 测试，要求通用用户只看到通用内容，完整权限用户看到通用和全量内容。
 
-- [ ] Step 3: Add must-read detail behavior.
-  - Validation test: Add an API test requiring detail to include title, update body, adjustment points, publish time, effective time, and permission level.
+- [ ] 步骤 3：添加最新必读详情行为。
+  - 验证测试：添加 API 测试，要求详情包含标题、更新正文、调整要点、发布时间、生效时间和权限级别。
 
-- [ ] Step 4: Prevent invisible must-read detail leaks.
-  - Validation test: Add an API test requiring a general user requesting a full must-read detail to receive a no-leak permission error.
+- [ ] 步骤 4：防止不可见最新必读详情泄露。
+  - 验证测试：添加 API 测试，要求通用用户请求全量级最新必读详情时收到无泄露权限错误。
 
-### Task 17: Implement Standard Script APIs
+### 任务 17：实现标准话术 API
 
-- [ ] Step 1: Add employee API behavior for core base scripts.
-  - Validation test: Add an API test requiring core base scripts to return summary points, update time, permission level, and detail link data.
+- [ ] 步骤 1：添加员工端核心基础话术 API 行为。
+  - 验证测试：添加 API 测试，要求核心基础话术返回摘要要点、更新时间、权限级别和详情链接数据。
 
-- [ ] Step 2: Add employee API behavior for standardized script items.
-  - Validation test: Add an API test requiring standardized items to include scenario, recommended wording summary, update time, and permission level.
+- [ ] 步骤 2：添加员工端标准化话术条目 API 行为。
+  - 验证测试：添加 API 测试，要求标准化条目包含场景、推荐说法摘要、更新时间和权限级别。
 
-- [ ] Step 3: Add scenario category filtering.
-  - Validation test: Add an API test requiring category filters to return only matching visible script items.
+- [ ] 步骤 3：添加场景分类筛选。
+  - 验证测试：添加 API 测试，要求分类筛选只返回匹配且当前用户可见的话术条目。
 
-- [ ] Step 4: Add script detail behavior.
-  - Validation test: Add an API test requiring detail to include scenario, recommended wording, forbidden wording, notes, update time, and copyable text.
+- [ ] 步骤 4：添加话术详情行为。
+  - 验证测试：添加 API 测试，要求详情包含场景、推荐说法、禁用说法、注意事项、更新时间和可复制文本。
 
-### Task 18: Implement Quiz APIs
+### 任务 18：实现测验 API
 
-- [ ] Step 1: Add admin quiz question management behavior.
-  - Validation test: Add API tests requiring admins to create, edit, enable, disable, and list quiz questions.
+- [ ] 步骤 1：添加管理员测验题管理行为。
+  - 验证测试：添加 API 测试，要求管理员能创建、编辑、启用、禁用和列出测验题。
 
-- [ ] Step 2: Add employee quiz question retrieval.
-  - Validation test: Add an API test requiring each quiz session to return between five and ten visible enabled questions when enough questions exist.
+- [ ] 步骤 2：添加员工获取测验题行为。
+  - 验证测试：添加 API 测试，要求题量充足时，每次测验会话返回五到十道当前用户可见且启用的题目。
 
-- [ ] Step 3: Apply permission filtering to quiz questions.
-  - Validation test: Add API tests requiring general users to receive only general questions and full users to receive general plus full questions.
+- [ ] 步骤 3：对测验题应用权限过滤。
+  - 验证测试：添加 API 测试，要求通用用户只收到通用题目，完整权限用户收到通用和全量题目。
 
-- [ ] Step 4: Add quiz submit behavior without persistence.
-  - Validation test: Add an API test requiring submission to return correctness, correct answers, explanations, and related content links while creating no answer record and no score record.
+- [ ] 步骤 4：添加不持久化的测验提交行为。
+  - 验证测试：添加 API 测试，要求提交后返回对错、正确答案、解析和关联内容链接，同时不创建答题记录和分数记录。
 
-## Phase 6: RAG, Indexing, And AI Safety
+## 阶段 6：RAG、索引和 AI 安全
 
-### Task 19: Implement Chunk Generation
+### 任务 19：实现切片生成
 
-- [ ] Step 1: Define chunk generation rules for core base scripts.
-  - Validation test: Add a service test requiring core base script chunks to preserve parent content ID, version ID, permission level, and active state.
+- [ ] 步骤 1：定义核心基础话术的切片生成规则。
+  - 验证测试：添加服务测试，要求核心基础话术切片保留父内容 ID、版本 ID、权限级别和启用状态。
 
-- [ ] Step 2: Define chunk generation rules for standardized script items.
-  - Validation test: Add a service test requiring each scenario item to become a business-boundary chunk rather than an arbitrary fixed-length chunk.
+- [ ] 步骤 2：定义标准化话术条目的切片生成规则。
+  - 验证测试：添加服务测试，要求每个场景条目按业务边界生成切片，而不是按固定长度任意切分。
 
-- [ ] Step 3: Define chunk generation rules for latest must-read entries.
-  - Validation test: Add a service test requiring each must-read entry to produce a chunk tied to its current version.
+- [ ] 步骤 3：定义最新必读的切片生成规则。
+  - 验证测试：添加服务测试，要求每条最新必读生成绑定当前版本的切片。
 
-- [ ] Step 4: Add duplicate-content hash behavior.
-  - Validation test: Add a service test requiring unchanged chunk text to produce stable content hash values and changed text to produce different values.
+- [ ] 步骤 4：添加重复内容哈希行为。
+  - 验证测试：添加服务测试，要求未变化的切片文本生成稳定内容哈希，变化后的文本生成不同哈希。
 
-### Task 20: Implement DashScope Integration Boundary
+### 任务 20：实现 DashScope 集成边界
 
-- [ ] Step 1: Add a DashScope client abstraction for chat generation.
-  - Validation test: Add a unit test using a fake model response requiring the abstraction to return normalized answer text and usage metadata without exposing provider-specific response shape.
+- [ ] 步骤 1：添加用于回答生成的 DashScope 客户端抽象。
+  - 验证测试：添加使用假模型响应的单元测试，要求该抽象返回标准化答案文本和用量元数据，且不暴露供应商特定响应结构。
 
-- [ ] Step 2: Add a DashScope embedding abstraction.
-  - Validation test: Add a unit test using a fake embedding response requiring the abstraction to return a numeric vector and embedding model name.
+- [ ] 步骤 2：添加 DashScope embedding 抽象。
+  - 验证测试：添加使用假 embedding 响应的单元测试，要求该抽象返回数值向量和 embedding 模型名。
 
-- [ ] Step 3: Add model configuration loading.
-  - Validation test: Add a configuration test requiring missing API key to fail only in real-provider mode and not in fake-client test mode.
+- [ ] 步骤 3：添加模型配置加载。
+  - 验证测试：添加配置测试，要求缺少 API Key 只在真实供应商模式下失败，在假客户端测试模式下不失败。
 
-- [ ] Step 4: Add provider error normalization.
-  - Validation test: Add a unit test requiring timeout, authentication failure, and malformed provider response to map to controlled internal errors.
+- [ ] 步骤 4：添加供应商错误标准化。
+  - 验证测试：添加单元测试，要求超时、认证失败和供应商响应格式异常都映射为受控内部错误。
 
-### Task 21: Implement Milvus Integration Boundary
+### 任务 21：实现 Milvus 集成边界
 
-- [ ] Step 1: Add a Milvus client abstraction for collection setup.
-  - Validation test: Add a unit test using a fake Milvus client requiring collection setup to be called with vector dimension, primary key, and metadata fields.
+- [ ] 步骤 1：添加用于 collection 初始化的 Milvus 客户端抽象。
+  - 验证测试：添加使用假 Milvus 客户端的单元测试，要求 collection 初始化时包含向量维度、主键和元数据字段。
 
-- [ ] Step 2: Add vector upsert behavior.
-  - Validation test: Add a unit test requiring vector upsert to include content ID, version ID, chunk ID, permission level, status, effective time, and expired time metadata.
+- [ ] 步骤 2：添加向量写入或更新行为。
+  - 验证测试：添加单元测试，要求向量写入包含内容 ID、版本 ID、切片 ID、权限级别、状态、生效时间和失效时间元数据。
 
-- [ ] Step 3: Add vector search behavior with metadata filters.
-  - Validation test: Add a unit test requiring general-user search filters to exclude full-level vectors before results are returned.
+- [ ] 步骤 3：添加带元数据过滤的向量检索行为。
+  - 验证测试：添加单元测试，要求通用用户检索过滤条件在结果返回前排除全量级向量。
 
-- [ ] Step 4: Add vector deactivation behavior.
-  - Validation test: Add a unit test requiring offline or historical version vectors to be marked inactive or removed from effective search scope.
+- [ ] 步骤 4：添加向量失效行为。
+  - 验证测试：添加单元测试，要求下线内容或历史版本向量被标记为非活跃，或从有效检索范围移除。
 
-### Task 22: Implement Index Synchronization
+### 任务 22：实现索引同步
 
-- [ ] Step 1: Connect publish behavior to chunk generation and embedding generation.
-  - Validation test: Add a service test requiring publish to produce active chunks and call the embedding client for each active chunk.
+- [ ] 步骤 1：将发布行为连接到切片生成和 embedding 生成。
+  - 验证测试：添加服务测试，要求发布后生成启用切片，并为每个启用切片调用 embedding 客户端。
 
-- [ ] Step 2: Connect embedding output to Milvus upsert and vector index records.
-  - Validation test: Add a service test requiring successful indexing to create active vector index records with Milvus primary keys.
+- [ ] 步骤 2：将 embedding 输出连接到 Milvus 写入和向量索引记录。
+  - 验证测试：添加服务测试，要求索引成功后创建带 Milvus 主键的启用向量索引记录。
 
-- [ ] Step 3: Handle embedding failure after content publish.
-  - Validation test: Add a service test requiring content to remain published, index status to become failed, and employee detail APIs to continue returning content.
+- [ ] 步骤 3：处理内容发布后 embedding 失败。
+  - 验证测试：添加服务测试，要求内容保持已发布，索引状态变为失败，员工详情 API 仍能返回内容。
 
-- [ ] Step 4: Add admin retry index behavior.
-  - Validation test: Add an API test requiring retry to change failed index status to synced when fake embedding and fake Milvus clients succeed.
+- [ ] 步骤 4：添加管理员重试索引行为。
+  - 验证测试：添加 API 测试，要求在假 embedding 和假 Milvus 客户端成功时，重试能把失败索引状态改为已同步。
 
-### Task 23: Implement RAG Search And Answer Flow
+### 任务 23：实现 RAG 检索和回答流程
 
-- [ ] Step 1: Add question embedding flow.
-  - Validation test: Add a service test requiring a user question to call the embedding abstraction exactly once and include the user permission level in subsequent search input.
+- [ ] 步骤 1：添加问题 embedding 流程。
+  - 验证测试：添加服务测试，要求一个用户问题只调用一次 embedding 抽象，并将用户权限级别传入后续检索输入。
 
-- [ ] Step 2: Add Milvus candidate retrieval with permission and status filters.
-  - Validation test: Add a service test requiring general users never receive full-level candidates even when fake Milvus returns mixed results.
+- [ ] 步骤 2：添加带权限和状态过滤的 Milvus 候选召回。
+  - 验证测试：添加服务测试，要求即使假 Milvus 返回混合结果，通用用户也绝不会收到全量级候选。
 
-- [ ] Step 3: Add similarity threshold miss behavior.
-  - Validation test: Add a service test requiring low-score candidates to return the fixed miss message and create a missed question record.
+- [ ] 步骤 3：添加相似度阈值未命中行为。
+  - 验证测试：添加服务测试，要求低分候选返回固定未命中提示，并创建未命中问题记录。
 
-- [ ] Step 4: Add MySQL source backfill for valid candidates.
-  - Validation test: Add a service test requiring candidate content to be reloaded from MySQL and requiring missing, offline, historical, or unauthorized sources to be excluded.
+- [ ] 步骤 4：为有效候选添加 MySQL 来源回查。
+  - 验证测试：添加服务测试，要求候选内容从 MySQL 重新加载，并排除缺失、下线、历史版本或无权限来源。
 
-- [ ] Step 5: Add answer generation with strict context.
-  - Validation test: Add a service test requiring the fake chat client to receive only authorized source text and requiring the returned source list to match the included context.
+- [ ] 步骤 5：添加严格上下文回答生成。
+  - 验证测试：添加服务测试，要求假聊天客户端只收到授权来源文本，并且返回的来源列表与进入上下文的内容一致。
 
-- [ ] Step 6: Add RAG API endpoint.
-  - Validation test: Add API tests for successful answer, no-hit answer, unauthorized token, general-user full-content attempt, and provider-unavailable error.
+- [ ] 步骤 6：添加 RAG API 端点。
+  - 验证测试：添加 API 测试，覆盖成功回答、无命中回答、未授权令牌、通用用户尝试获得全量内容、供应商不可用错误。
 
-### Task 24: Implement Missed Question Management
+### 任务 24：实现未命中问题管理
 
-- [ ] Step 1: Add backend behavior to record missed questions.
-  - Validation test: Add a service test requiring missed question records to include question text, user ID, account type, content level, asked time, and new status.
+- [ ] 步骤 1：添加记录未命中问题的后端行为。
+  - 验证测试：添加服务测试，要求未命中问题记录包含问题文本、用户 ID、账号类型、内容权限级别、提问时间和新建状态。
 
-- [ ] Step 2: Add admin missed question list API.
-  - Validation test: Add an API test requiring admins to list missed questions with text, asked time, user, permission snapshot, and status.
+- [ ] 步骤 2：添加管理员未命中问题列表 API。
+  - 验证测试：添加 API 测试，要求管理员能列出包含文本、提问时间、用户、权限快照和状态的未命中问题。
 
-- [ ] Step 3: Add admin mark-handled behavior.
-  - Validation test: Add an API test requiring status to change from new to handled and requiring handled time to be set.
+- [ ] 步骤 3：添加管理员标记已处理行为。
+  - 验证测试：添加 API 测试，要求状态从新建变为已处理，并设置处理时间。
 
-- [ ] Step 4: Reject non-admin missed question management.
-  - Validation test: Add API tests requiring `full_user` and `general_user` to be denied missed question list and update endpoints.
+- [ ] 步骤 4：拒绝非管理员管理未命中问题。
+  - 验证测试：添加 API 测试，要求 `full_user` 和 `general_user` 被拒绝访问未命中问题列表和更新接口。
 
-## Phase 7: Frontend Auth, Routing, And Shared UI
+## 阶段 7：前端认证、路由与共享 UI
 
-### Task 25: Implement Frontend Auth Store And Route Guards
+### 任务 25：实现前端认证状态和路由守卫
 
-- [ ] Step 1: Add auth store behavior for token, user identity, account type, content level, and logout.
-  - Validation test: Add store tests requiring login state to persist for the session and logout to clear token and user data.
+- [ ] 步骤 1：添加认证状态仓库行为，包含 token、用户身份、账号类型、内容权限级别和退出登录。
+  - 验证测试：添加状态仓库测试，要求登录状态在会话内保持，退出登录清除 token 和用户数据。
 
-- [ ] Step 2: Add route guard for protected employee routes.
-  - Validation test: Add route tests requiring unauthenticated users visiting `/app` routes to redirect to login.
+- [ ] 步骤 2：添加员工受保护路由守卫。
+  - 验证测试：添加路由测试，要求未认证用户访问 `/app` 路由时重定向到登录页。
 
-- [ ] Step 3: Add route guard for admin routes.
-  - Validation test: Add route tests requiring non-admin users visiting `/admin` routes to be blocked and requiring admin users to enter.
+- [ ] 步骤 3：添加后台路由守卫。
+  - 验证测试：添加路由测试，要求非管理员访问 `/admin` 路由被阻止，管理员可以进入。
 
-- [ ] Step 4: Add global API unauthorized handling.
-  - Validation test: Add API client tests requiring authentication errors to clear local auth state and redirect to login.
+- [ ] 步骤 4：添加全局 API 未授权处理。
+  - 验证测试：添加 API 客户端测试，要求认证错误会清除本地认证状态并重定向到登录页。
 
-### Task 26: Implement Login Page
+### 任务 26：实现登录页
 
-- [ ] Step 1: Build login form behavior with username and password fields.
-  - Validation test: Add component tests requiring empty username or empty password to prevent submission and show validation feedback.
+- [ ] 步骤 1：构建包含用户名和密码字段的登录表单行为。
+  - 验证测试：添加组件测试，要求用户名或密码为空时阻止提交并显示校验反馈。
 
-- [ ] Step 2: Connect login page to backend login API.
-  - Validation test: Add component tests with mocked API requiring successful login to store user identity and route to the correct default page.
+- [ ] 步骤 2：将登录页连接到后端登录 API。
+  - 验证测试：添加使用模拟 API 的组件测试，要求登录成功后存储用户身份，并跳转到正确默认页面。
 
-- [ ] Step 3: Add login failure display.
-  - Validation test: Add component tests requiring invalid credentials and disabled account responses to show a generic login failure message.
+- [ ] 步骤 3：添加登录失败展示。
+  - 验证测试：添加组件测试，要求无效凭据和禁用账号响应都显示通用登录失败信息。
 
-- [ ] Step 4: Verify mobile login layout.
-  - Validation test: Add visual or DOM layout test requiring login controls to fit within a mobile viewport without overlapping.
+- [ ] 步骤 4：验证移动端登录布局。
+  - 验证测试：添加视觉或 DOM 布局测试，要求登录控件在移动端视口内适配且不重叠。
 
-### Task 27: Implement Shared Layouts
+### 任务 27：实现共享布局
 
-- [ ] Step 1: Build employee app layout with AI search entry and three core navigation entries.
-  - Validation test: Add component tests requiring latest must-read, standard script, and quiz entries to render for authenticated employee users.
+- [ ] 步骤 1：构建员工端应用布局，包含 AI 搜索入口和三个核心导航入口。
+  - 验证测试：添加组件测试，要求已认证员工用户能看到最新必读、标准话术和巩固测试入口。
 
-- [ ] Step 2: Build admin layout with content, quiz, users, and missed question navigation.
-  - Validation test: Add component tests requiring admin navigation entries to render only for admin users.
+- [ ] 步骤 2：构建后台布局，包含内容、测验、用户和未命中问题导航。
+  - 验证测试：添加组件测试，要求后台导航入口只对管理员用户渲染。
 
-- [ ] Step 3: Add global empty, loading, and error states.
-  - Validation test: Add component tests requiring standard empty, loading, permission error, service error, and AI unavailable states to render correct text.
+- [ ] 步骤 3：添加全局空状态、加载状态和错误状态。
+  - 验证测试：添加组件测试，要求标准空状态、加载状态、权限错误、服务错误和 AI 不可用状态渲染正确文案。
 
-- [ ] Step 4: Add copy-to-clipboard feedback behavior.
-  - Validation test: Add component tests requiring successful copy actions to show confirmation and failed copy actions to show a recoverable error.
+- [ ] 步骤 4：添加复制到剪贴板反馈行为。
+  - 验证测试：添加组件测试，要求复制成功显示确认反馈，复制失败显示可恢复错误。
 
-## Phase 8: Frontend Employee Pages
+## 阶段 8：前端员工页面
 
-### Task 28: Implement Employee Home Page
+### 任务 28：实现员工首页
 
-- [ ] Step 1: Add home page AI question input.
-  - Validation test: Add component tests requiring blank questions to be rejected and nonblank questions to trigger the RAG request path.
+- [ ] 步骤 1：添加首页 AI 问题输入。
+  - 验证测试：添加组件测试，要求空问题被拒绝，非空问题触发 RAG 请求路径。
 
-- [ ] Step 2: Add home page core entry cards.
-  - Validation test: Add component tests requiring exactly three primary entries: latest must-read, standard script, and quiz.
+- [ ] 步骤 2：添加首页核心入口卡片。
+  - 验证测试：添加组件测试，要求正好渲染三个主要入口：最新必读、标准话术和巩固测试。
 
-- [ ] Step 3: Add user identity and logout display.
-  - Validation test: Add component tests requiring display name and logout action to be visible after login.
+- [ ] 步骤 3：添加用户身份和退出登录展示。
+  - 验证测试：添加组件测试，要求登录后展示用户名并显示退出登录动作。
 
-### Task 29: Implement Latest Must-Read Pages
+### 任务 29：实现最新必读页面
 
-- [ ] Step 1: Add must-read list page.
-  - Validation test: Add component tests requiring list items to display title, publish time, effective time, and permission level.
+- [ ] 步骤 1：添加最新必读列表页。
+  - 验证测试：添加组件测试，要求列表项显示标题、发布时间、生效时间和权限级别。
 
-- [ ] Step 2: Add must-read list empty state.
-  - Validation test: Add component tests requiring the empty text “暂无可查看的最新必读” when API returns no visible entries.
+- [ ] 步骤 2：添加最新必读列表空状态。
+  - 验证测试：添加组件测试，要求 API 返回无可见内容时显示“暂无可查看的最新必读”。
 
-- [ ] Step 3: Add must-read detail page.
-  - Validation test: Add component tests requiring title, update body, adjustment points, publish time, effective time, and permission level to render.
+- [ ] 步骤 3：添加最新必读详情页。
+  - 验证测试：添加组件测试，要求渲染标题、更新正文、调整要点、发布时间、生效时间和权限级别。
 
-- [ ] Step 4: Add must-read permission error handling.
-  - Validation test: Add component tests requiring permission errors to show “无权查看该内容” without stale content remaining on screen.
+- [ ] 步骤 4：添加最新必读权限错误处理。
+  - 验证测试：添加组件测试，要求权限错误显示“无权查看该内容”，并且屏幕上不残留旧内容。
 
-### Task 30: Implement Standard Script Pages
+### 任务 30：实现标准话术页面
 
-- [ ] Step 1: Add core base script list area.
-  - Validation test: Add component tests requiring each base script item to display title, summary points, update time, and permission level.
+- [ ] 步骤 1：添加核心基础话术列表区域。
+  - 验证测试：添加组件测试，要求每个基础话术项显示标题、摘要要点、更新时间和权限级别。
 
-- [ ] Step 2: Add standardized script item list area.
-  - Validation test: Add component tests requiring each script item to display scenario, recommended wording summary, update time, and permission level.
+- [ ] 步骤 2：添加标准化话术条目列表区域。
+  - 验证测试：添加组件测试，要求每个话术条目显示场景、推荐说法摘要、更新时间和权限级别。
 
-- [ ] Step 3: Add scenario category filter.
-  - Validation test: Add component tests requiring category selection to request filtered data and update the visible list.
+- [ ] 步骤 3：添加场景分类筛选。
+  - 验证测试：添加组件测试，要求选择分类后请求筛选数据并更新可见列表。
 
-- [ ] Step 4: Add script detail page.
-  - Validation test: Add component tests requiring scenario, recommended wording, forbidden wording, notes, update time, and copy actions to render.
+- [ ] 步骤 4：添加话术详情页。
+  - 验证测试：添加组件测试，要求渲染场景、推荐说法、禁用说法、注意事项、更新时间和复制动作。
 
-- [ ] Step 5: Add script copy actions.
-  - Validation test: Add component tests requiring recommended wording copy and full item copy to use the correct text from the rendered detail.
+- [ ] 步骤 5：添加话术复制动作。
+  - 验证测试：添加组件测试，要求复制推荐说法和复制完整条目时使用详情页中渲染的正确文本。
 
-### Task 31: Implement Quiz Page
+### 任务 31：实现巩固测试页面
 
-- [ ] Step 1: Add quiz question rendering.
-  - Validation test: Add component tests requiring five to ten questions to render when API returns that range.
+- [ ] 步骤 1：添加测验题目渲染。
+  - 验证测试：添加组件测试，要求 API 返回五到十道题时全部渲染出来。
 
-- [ ] Step 2: Add answer selection behavior.
-  - Validation test: Add component tests requiring selected answers to be tracked per question without submitting early.
+- [ ] 步骤 2：添加答案选择行为。
+  - 验证测试：添加组件测试，要求每道题分别记录已选答案，且不会提前提交。
 
-- [ ] Step 3: Add quiz submission behavior.
-  - Validation test: Add component tests requiring submit to call the quiz submit API with selected answers and disable duplicate submission while waiting.
+- [ ] 步骤 3：添加测验提交行为。
+  - 验证测试：添加组件测试，要求提交时用已选答案调用测验提交 API，并在等待期间禁止重复提交。
 
-- [ ] Step 4: Add quiz result display.
-  - Validation test: Add component tests requiring correctness, correct answer, explanation, and related content entry to render after submission.
+- [ ] 步骤 4：添加测验结果展示。
+  - 验证测试：添加组件测试，要求提交后渲染对错、正确答案、解析和关联内容入口。
 
-- [ ] Step 5: Confirm no score history UI exists.
-  - Validation test: Add a page test requiring no ranking, score history, personal statistics, or management statistics labels to appear on the quiz page.
+- [ ] 步骤 5：确认不存在分数历史界面。
+  - 验证测试：添加页面测试，要求测验页不出现排行、分数历史、个人统计或管理统计标签。
 
-### Task 32: Implement AI Answer UI
+### 任务 32：实现 AI 回答界面
 
-- [ ] Step 1: Add AI answer result display.
-  - Validation test: Add component tests requiring answer text, source list, source update time, and copy button to render after successful RAG response.
+- [ ] 步骤 1：添加 AI 回答结果展示。
+  - 验证测试：添加组件测试，要求成功 RAG 响应后渲染回答正文、来源列表、来源更新时间和复制按钮。
 
-- [ ] Step 2: Add AI miss display.
-  - Validation test: Add component tests requiring the fixed miss text “当前没有有效标准口径，请联系管理员。” when the backend returns no hit.
+- [ ] 步骤 2：添加 AI 未命中展示。
+  - 验证测试：添加组件测试，要求后端返回无命中时显示固定文案“当前没有有效标准口径，请联系管理员。”。
 
-- [ ] Step 3: Add AI service unavailable display.
-  - Validation test: Add component tests requiring “智能问答暂不可用，请稍后重试” for model or Milvus service errors.
+- [ ] 步骤 3：添加 AI 服务不可用展示。
+  - 验证测试：添加组件测试，要求模型或 Milvus 服务错误时显示“智能问答暂不可用，请稍后重试”。
 
-- [ ] Step 4: Add source navigation behavior.
-  - Validation test: Add component tests requiring source links to navigate only to accessible content detail routes.
+- [ ] 步骤 4：添加来源跳转行为。
+  - 验证测试：添加组件测试，要求来源链接只跳转到可访问的内容详情路由。
 
-## Phase 9: Frontend Admin Pages
+## 阶段 9：前端后台页面
 
-### Task 33: Implement Admin Content List
+### 任务 33：实现后台内容列表
 
-- [ ] Step 1: Add content list table with filters.
-  - Validation test: Add component tests requiring filters for content type, status, permission level, and category to change API query parameters.
+- [ ] 步骤 1：添加带筛选器的内容列表表格。
+  - 验证测试：添加组件测试，要求内容类型、状态、权限级别和分类筛选器能改变 API 查询参数。
 
-- [ ] Step 2: Add content operation entries.
-  - Validation test: Add component tests requiring draft edit, publish, offline, history, index status, and retry index actions to appear only where valid for the content status.
+- [ ] 步骤 2：添加内容操作入口。
+  - 验证测试：添加组件测试，要求草稿编辑、发布、下线、历史、索引状态和重试索引动作只在内容状态允许时出现。
 
-- [ ] Step 3: Add pagination.
-  - Validation test: Add component tests requiring page changes to request the correct page and preserve active filters.
+- [ ] 步骤 3：添加分页。
+  - 验证测试：添加组件测试，要求切换页码时请求正确页码并保留当前筛选条件。
 
-- [ ] Step 4: Add index status display.
-  - Validation test: Add component tests requiring unsynced, syncing, synced, and failed states to render distinct labels.
+- [ ] 步骤 4：添加索引状态展示。
+  - 验证测试：添加组件测试，要求未同步、同步中、已同步和同步失败渲染为不同标签。
 
-### Task 34: Implement Admin Content Editor
+### 任务 34：实现后台内容编辑器
 
-- [ ] Step 1: Add shared content fields.
-  - Validation test: Add component tests requiring title, content type, category, permission level, summary, and body validation.
+- [ ] 步骤 1：添加通用内容字段。
+  - 验证测试：添加组件测试，要求校验标题、内容类型、分类、权限级别、摘要和正文。
 
-- [ ] Step 2: Add standard script item fields.
-  - Validation test: Add component tests requiring scenario, recommended wording, forbidden wording, and notes fields for standardized script items.
+- [ ] 步骤 2：添加标准化话术条目字段。
+  - 验证测试：添加组件测试，要求标准化话术条目包含场景、推荐说法、禁用说法和注意事项字段。
 
-- [ ] Step 3: Add latest must-read fields.
-  - Validation test: Add component tests requiring update body and adjustment points fields for latest must-read entries.
+- [ ] 步骤 3：添加最新必读字段。
+  - 验证测试：添加组件测试，要求最新必读包含更新正文和调整要点字段。
 
-- [ ] Step 4: Add draft save behavior.
-  - Validation test: Add component tests requiring successful draft save to show confirmation and route back to admin content detail or list.
+- [ ] 步骤 4：添加草稿保存行为。
+  - 验证测试：添加组件测试，要求草稿保存成功后显示确认，并跳回后台内容详情或列表。
 
-### Task 35: Implement Publish, Offline, History, And Retry UI
+### 任务 35：实现发布、下线、历史和重试索引界面
 
-- [ ] Step 1: Add publish confirmation dialog.
-  - Validation test: Add component tests requiring title, content type, permission level, visible audience, and replacement warning to appear before publish.
+- [ ] 步骤 1：添加发布确认弹窗。
+  - 验证测试：添加组件测试，要求发布前显示标题、内容类型、权限级别、可见受众和替换提醒。
 
-- [ ] Step 2: Add publish result handling.
-  - Validation test: Add component tests requiring successful publish to show success and index failure publish to show content-published-but-AI-unavailable notice.
+- [ ] 步骤 2：添加发布结果处理。
+  - 验证测试：添加组件测试，要求发布成功显示成功提示，索引失败时显示内容已发布但 AI 暂不可用提示。
 
-- [ ] Step 3: Add offline confirmation behavior.
-  - Validation test: Add component tests requiring offline confirmation before calling the offline API and requiring the list to update after success.
+- [ ] 步骤 3：添加下线确认行为。
+  - 验证测试：添加组件测试，要求调用下线 API 前先确认，下线成功后更新列表。
 
-- [ ] Step 4: Add history page.
-  - Validation test: Add component tests requiring version number, title, publish time, publisher, permission level, and body snapshot to render.
+- [ ] 步骤 4：添加历史版本页。
+  - 验证测试：添加组件测试，要求渲染版本号、标题、发布时间、发布人、权限级别和正文快照。
 
-- [ ] Step 5: Add retry index action.
-  - Validation test: Add component tests requiring retry index to be available only when index status is failed and to refresh status after success.
+- [ ] 步骤 5：添加重试索引动作。
+  - 验证测试：添加组件测试，要求只有索引状态为失败时才显示重试索引，并在成功后刷新状态。
 
-### Task 36: Implement Admin Quiz Management
+### 任务 36：实现后台测验题管理
 
-- [ ] Step 1: Add quiz question list.
-  - Validation test: Add component tests requiring question, permission level, related content, status, and update time to render.
+- [ ] 步骤 1：添加测验题列表。
+  - 验证测试：添加组件测试，要求渲染题干、权限级别、关联内容、状态和更新时间。
 
-- [ ] Step 2: Add quiz editor.
-  - Validation test: Add component tests requiring question, options, correct answer, explanation, related content, permission level, and status validation.
+- [ ] 步骤 2：添加测验题编辑器。
+  - 验证测试：添加组件测试，要求校验题干、选项、正确答案、解析、关联内容、权限级别和状态。
 
-- [ ] Step 3: Add enable and disable behavior.
-  - Validation test: Add component tests requiring enable and disable actions to update status and refresh list data.
+- [ ] 步骤 3：添加启用和禁用行为。
+  - 验证测试：添加组件测试，要求启用和禁用动作更新状态并刷新列表数据。
 
-### Task 37: Implement Admin User Management
+### 任务 37：实现后台用户管理
 
-- [ ] Step 1: Add user list.
-  - Validation test: Add component tests requiring username, display name, account type, content level, status, and update time to render.
+- [ ] 步骤 1：添加用户列表。
+  - 验证测试：添加组件测试，要求渲染用户名、展示名、账号类型、内容权限级别、状态和更新时间。
 
-- [ ] Step 2: Add user create and edit form.
-  - Validation test: Add component tests requiring username, display name, account type, content level, and status validation.
+- [ ] 步骤 2：添加用户创建和编辑表单。
+  - 验证测试：添加组件测试，要求校验用户名、展示名、账号类型、内容权限级别和状态。
 
-- [ ] Step 3: Add password reset behavior.
-  - Validation test: Add component tests requiring reset confirmation and requiring returned temporary password or reset instruction to be shown only once.
+- [ ] 步骤 3：添加重置密码行为。
+  - 验证测试：添加组件测试，要求重置前确认，并且返回的临时密码或重置说明只显示一次。
 
-- [ ] Step 4: Add disable account behavior.
-  - Validation test: Add component tests requiring disabled users to appear with disabled state and requiring disabled accounts to fail login in backend API tests.
+- [ ] 步骤 4：添加禁用账号行为。
+  - 验证测试：添加组件测试，要求禁用用户显示为禁用状态，并且后端 API 测试中禁用账号登录失败。
 
-### Task 38: Implement Admin Missed Question Management
+### 任务 38：实现后台未命中问题管理
 
-- [ ] Step 1: Add missed question list.
-  - Validation test: Add component tests requiring question text, asked time, user, permission snapshot, and status to render.
+- [ ] 步骤 1：添加未命中问题列表。
+  - 验证测试：添加组件测试，要求渲染问题文本、提问时间、用户、权限快照和状态。
 
-- [ ] Step 2: Add status filter.
-  - Validation test: Add component tests requiring new and handled filters to request the correct API state.
+- [ ] 步骤 2：添加状态筛选。
+  - 验证测试：添加组件测试，要求新建和已处理筛选请求正确 API 状态。
 
-- [ ] Step 3: Add mark-handled action.
-  - Validation test: Add component tests requiring mark-handled to update row state and handled time after API success.
+- [ ] 步骤 3：添加标记已处理动作。
+  - 验证测试：添加组件测试，要求标记已处理后更新行状态和处理时间。
 
-- [ ] Step 4: Confirm no statistics dashboard exists.
-  - Validation test: Add a page test requiring no chart, aggregate count board, ranking, or analytics panel to appear in missed question management.
+- [ ] 步骤 4：确认不存在统计看板。
+  - 验证测试：添加页面测试，要求未命中问题管理中不出现图表、聚合数量面板、排行或分析面板。
 
-## Phase 10: End-To-End Verification
+## 阶段 10：端到端验证
 
-### Task 39: Build Backend Fixture Data For E2E
+### 任务 39：为端到端测试构建后端夹具数据
 
-- [ ] Step 1: Create deterministic test accounts for admin, full user, and general user in the E2E environment.
-  - Validation test: Add an E2E setup test requiring all three accounts to log in and return the expected account type and content level.
+- [ ] 步骤 1：在端到端环境中创建确定性的管理员、完整权限用户和通用用户测试账号。
+  - 验证测试：添加端到端准备测试，要求三个账号都能登录并返回预期账号类型和内容权限级别。
 
-- [ ] Step 2: Create deterministic content fixtures for general and full permission levels.
-  - Validation test: Add an E2E setup test requiring the fixture content to include at least one must-read, one base script, one standardized script item, and one quiz question per relevant permission level.
+- [ ] 步骤 2：为通用和全量权限级别创建确定性的内容夹具。
+  - 验证测试：添加端到端准备测试，要求夹具内容至少包含每个相关权限级别的一条最新必读、一条基础话术、一条标准化话术条目和一道测验题。
 
-- [ ] Step 3: Create deterministic fake RAG fixtures for successful hit and miss.
-  - Validation test: Add an E2E setup test requiring the fake RAG path to return one successful sourced answer and one no-hit response.
+- [ ] 步骤 3：为成功命中和未命中创建确定性的假 RAG 夹具。
+  - 验证测试：添加端到端准备测试，要求假 RAG 路径返回一个带来源的成功回答和一个无命中响应。
 
-### Task 40: Implement Playwright Smoke Tests
+### 任务 40：实现 Playwright 冒烟测试
 
-- [ ] Step 1: Add admin login and content publish smoke test.
-  - Validation test: The smoke test must create a general-level draft, publish it, and observe it in employee-visible content.
+- [ ] 步骤 1：添加管理员登录和内容发布冒烟测试。
+  - 验证测试：该冒烟测试必须创建一条通用级草稿，发布它，并在员工可见内容中观察到它。
 
-- [ ] Step 2: Add general-user permission isolation smoke test.
-  - Validation test: The smoke test must confirm a general user cannot see full-level content in lists, details, AI sources, or quiz questions.
+- [ ] 步骤 2：添加通用用户权限隔离冒烟测试。
+  - 验证测试：该冒烟测试必须确认通用用户无法在列表、详情、AI 来源或测验题中看到全量级内容。
 
-- [ ] Step 3: Add full-user visibility smoke test.
-  - Validation test: The smoke test must confirm a full user can see both general-level and full-level content.
+- [ ] 步骤 3：添加完整权限用户可见性冒烟测试。
+  - 验证测试：该冒烟测试必须确认完整权限用户可以看到通用级和全量级内容。
 
-- [ ] Step 4: Add AI miss smoke test.
-  - Validation test: The smoke test must submit an unanswerable question, observe the fixed miss message, then confirm the admin missed question list contains that question.
+- [ ] 步骤 4：添加 AI 未命中冒烟测试。
+  - 验证测试：该冒烟测试必须提交一个无法回答的问题，观察固定未命中文案，然后确认后台未命中问题列表包含该问题。
 
-- [ ] Step 5: Add quiz no-persistence smoke test.
-  - Validation test: The smoke test must submit quiz answers, see explanations, reload the page, and confirm no score history or answer history is shown.
+- [ ] 步骤 5：添加测验不持久化冒烟测试。
+  - 验证测试：该冒烟测试必须提交测验答案，看到解析，刷新页面后确认没有分数历史或答题历史。
 
-### Task 41: Run MVP Acceptance Checklist
+### 任务 41：运行 MVP 验收清单
 
-- [ ] Step 1: Verify all backend tests.
-  - Validation test: Backend unit, service, API, and migration tests must complete with zero failures.
+- [ ] 步骤 1：验证全部后端测试。
+  - 验证测试：后端单元、服务、API 和迁移测试必须全部完成且零失败。
 
-- [ ] Step 2: Verify all frontend tests.
-  - Validation test: Frontend unit and component tests must complete with zero failures.
+- [ ] 步骤 2：验证全部前端测试。
+  - 验证测试：前端单元和组件测试必须全部完成且零失败。
 
-- [ ] Step 3: Verify all Playwright smoke tests.
-  - Validation test: Playwright smoke tests for login, permission isolation, publish, AI miss, and quiz behavior must complete with zero failures.
+- [ ] 步骤 3：验证全部 Playwright 冒烟测试。
+  - 验证测试：登录、权限隔离、发布、AI 未命中和测验行为的 Playwright 冒烟测试必须全部完成且零失败。
 
-- [ ] Step 4: Verify MVP acceptance criteria one by one.
-  - Validation test: Create a checklist mapping each acceptance criterion from `memory-bank/design-document.md` section 13 to a passing test or documented manual verification.
+- [ ] 步骤 4：逐条验证 MVP 验收标准。
+  - 验证测试：创建一份清单，将 `memory-bank/design-document.md` 第 13 节中的每条验收标准映射到已通过测试或已记录的手动验证。
 
-## Phase 11: Documentation, Deployment Notes, And Memory Updates
+## 阶段 11：文档、部署说明和记忆文件更新
 
-### Task 42: Update Documentation For Local Development
+### 任务 42：更新本地开发文档
 
-- [ ] Step 1: Add backend local setup instructions.
-  - Validation test: A developer following only the documentation can identify how to configure database URL, JWT secret, Milvus host, and DashScope settings.
+- [ ] 步骤 1：添加后端本地设置说明。
+  - 验证测试：开发者只看文档即可知道如何配置数据库 URL、JWT 密钥、Milvus 主机和 DashScope 设置。
 
-- [ ] Step 2: Add frontend local setup instructions.
-  - Validation test: A developer following only the documentation can identify how to configure the API base URL and run frontend tests.
+- [ ] 步骤 2：添加前端本地设置说明。
+  - 验证测试：开发者只看文档即可知道如何配置 API 基础 URL 和运行前端测试。
 
-- [ ] Step 3: Add local dependency startup instructions.
-  - Validation test: A developer following only the documentation can identify how to start or connect MySQL and Milvus without using production secrets.
+- [ ] 步骤 3：添加本地依赖启动说明。
+  - 验证测试：开发者只看文档即可知道如何启动或连接 MySQL 和 Milvus，且无需使用生产密钥。
 
-- [ ] Step 4: Add test execution instructions.
-  - Validation test: Documentation must list backend tests, frontend tests, and Playwright smoke tests as separate verification categories.
+- [ ] 步骤 4：添加测试执行说明。
+  - 验证测试：文档必须分别列出后端测试、前端测试和 Playwright 冒烟测试三个验证类别。
 
-### Task 43: Add Deployment Notes For Baota And ECS
+### 任务 43：添加宝塔和 ECS 部署说明
 
-- [ ] Step 1: Document frontend deployment as a static HTML project.
-  - Validation test: Documentation must state that production frontend output is served as static files and does not require a Node server.
+- [ ] 步骤 1：将前端部署记录为静态 HTML 项目。
+  - 验证测试：文档必须说明生产前端产物以静态文件方式提供服务，不需要 Node 服务器。
 
-- [ ] Step 2: Document backend deployment as a Python project.
-  - Validation test: Documentation must state the backend listens on a local port behind Nginx or Baota reverse proxy.
+- [ ] 步骤 2：将后端部署记录为 Python 项目。
+  - 验证测试：文档必须说明后端监听本地端口，并位于 Nginx 或宝塔反向代理之后。
 
-- [ ] Step 3: Document MySQL deployment options.
-  - Validation test: Documentation must state that SQLAlchemy is not an extra database and that the only business database is MySQL.
+- [ ] 步骤 3：记录 MySQL 部署选项。
+  - 验证测试：文档必须说明 SQLAlchemy 不是额外数据库，唯一业务数据库是 MySQL。
 
-- [ ] Step 4: Document Milvus deployment as the extra service.
-  - Validation test: Documentation must clearly state that Milvus is the main additional runtime service and can be run with Docker.
+- [ ] 步骤 4：将 Milvus 记录为额外服务。
+  - 验证测试：文档必须明确说明 Milvus 是主要额外运行时服务，可通过 Docker 运行。
 
-- [ ] Step 5: Document DashScope configuration.
-  - Validation test: Documentation must state that DashScope is an external API configured by environment variables and is never called from the frontend.
+- [ ] 步骤 5：记录 DashScope 配置。
+  - 验证测试：文档必须说明 DashScope 是通过环境变量配置的外部 API，且绝不能由前端直接调用。
 
-### Task 44: Update Memory Bank After Major Milestones
+### 任务 44：重大里程碑后更新 Memory Bank
 
-- [ ] Step 1: Update `memory-bank/architecture.md` after backend scaffold and data model are stable.
-  - Validation test: Confirm the memory file describes the actual backend directory, chosen dependency manager, migration approach, and test categories.
+- [ ] 步骤 1：后端脚手架和数据模型稳定后，更新 `memory-bank/architecture.md`。
+  - 验证测试：确认记忆文件描述实际后端目录、选定依赖管理器、迁移方式和测试类别。
 
-- [ ] Step 2: Update `memory-bank/architecture.md` after RAG indexing and answer flow are stable.
-  - Validation test: Confirm the memory file describes the actual chunking rules, fake-client test strategy, source consistency rule, and index failure behavior.
+- [ ] 步骤 2：RAG 索引和回答流程稳定后，更新 `memory-bank/architecture.md`。
+  - 验证测试：确认记忆文件描述实际切片规则、假客户端测试策略、来源一致性规则和索引失败行为。
 
-- [ ] Step 3: Update `memory-bank/architecture.md` after frontend route and page structure are stable.
-  - Validation test: Confirm the memory file describes the actual frontend route groups, shared stores, admin pages, employee pages, and test approach.
+- [ ] 步骤 3：前端路由和页面结构稳定后，更新 `memory-bank/architecture.md`。
+  - 验证测试：确认记忆文件描述实际前端路由分组、共享状态、后台页面、员工页面和测试方式。
 
-- [ ] Step 4: Update `memory-bank/architecture.md` after MVP acceptance tests pass.
-  - Validation test: Confirm the memory file lists the final MVP runtime shape, known limitations, non-goals, and next-phase extension points.
+- [ ] 步骤 4：MVP 验收测试通过后，更新 `memory-bank/architecture.md`。
+  - 验证测试：确认记忆文件列出最终 MVP 运行形态、已知限制、非目标和下一阶段扩展点。
 
-## Final Handoff Checklist
+## 最终交付检查清单
 
-- [ ] Step 1: Confirm no implementation code appears in this plan.
-  - Validation test: Search this file for implementation code blocks and confirm none exist.
+- [ ] 步骤 1：确认本计划没有实现代码。
+  - 验证测试：搜索本文件中的实现代码块，并确认不存在。
 
-- [ ] Step 2: Confirm every plan step has a validation test.
-  - Validation test: Search this file for every checkbox step and confirm each one has a directly adjacent “Validation test” line.
+- [ ] 步骤 2：确认每个计划步骤都有验证测试。
+  - 验证测试：搜索本文件中的每个复选框步骤，确认每个步骤旁边都有直接对应的“验证测试”行。
 
-- [ ] Step 3: Confirm plan coverage against product design.
-  - Validation test: Map login, homepage, latest must-read, standard scripts, quiz, AI Q&A, admin content, versions, indexing, missed questions, permissions, local verification, and deployment notes to tasks in this plan.
+- [ ] 步骤 3：确认计划覆盖产品设计。
+  - 验证测试：将登录、首页、最新必读、标准话术、巩固测试、AI 问答、后台内容、版本、索引、未命中问题、权限、本地验证和部署说明映射到本计划中的任务。
 
-- [ ] Step 4: Confirm plan coverage against tech stack.
-  - Validation test: Map Vue, TypeScript, Vite, Vue Router, Pinia, Axios, Element Plus, FastAPI, SQLAlchemy, Alembic, MySQL, Milvus, DashScope, pytest, Vitest, and Playwright to tasks in this plan.
+- [ ] 步骤 4：确认计划覆盖技术栈。
+  - 验证测试：将 Vue、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、FastAPI、SQLAlchemy、Alembic、MySQL、Milvus、DashScope、pytest、Vitest 和 Playwright 映射到本计划中的任务。

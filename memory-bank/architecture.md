@@ -1,0 +1,214 @@
+# 企业话术智能检索与统一培训管理系统 MVP 架构记忆
+
+## 当前运行形态
+- 前端是一个 Vue 3 + TypeScript + Vite SPA，承载登录页、员工端 `/app` 和后台端 `/admin`，并通过 Pinia 保存会话状态、通过 Vue Router 守卫控制前后台入口。
+- 后端是一个 FastAPI 单体服务，承载 REST API、认证授权、内容管理、员工内容读取、测验管理、RAG 索引和 AI 问答编排。
+- MySQL 是唯一权威业务数据源；自动化测试使用 SQLite 临时库验证模型、迁移和 API 行为，不改变生产目标。
+- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status`。
+- Milvus 通过后端集成边界访问；自动化测试使用内存假客户端，真实模式使用 PyMilvus `MilvusClient` 写入本地 Milvus，Milvus 只作为向量索引，不保存权威正文。
+- DashScope 只能由后端调用；自动化测试使用假聊天和假 embedding 客户端，不调用真实模型服务。
+
+## 架构决策
+- 后端保持 FastAPI 单体，不拆微服务，不引入 LangChain、LangGraph、Celery、Redis、Kubernetes 或对象存储。
+- 数据访问采用同步 SQLAlchemy 2.x + PyMySQL，优先保证 MVP 事务一致性和实现直观性。
+- 每次受保护请求都从数据库加载当前用户，禁用账号无法继续访问。
+- 内容权限以后端为准：`general_user` 只能访问 `general`，`full_user` 和 `admin` 可访问 `general` 与 `full`。
+- 员工端内容接口只返回已发布、未下线、当前用户可见的当前版本；草稿、历史版本和下线内容不对员工可见。
+- 内容发布会生成不可变 `content_versions` 快照，并为当前版本生成 active `content_chunks`；旧 chunk 会被置为 inactive。
+- 内容发布后会触发同步索引流程；索引成功写入 `vector_index_records` 并将 `contents.index_status` 置为 `synced`，索引失败不回滚发布内容，只将状态置为 `failed`。
+- Milvus 只保存向量和过滤元数据，不保存权威正文；AI 回答前必须回查 MySQL 当前版本正文。
+- RAG 回答先做问题 embedding，再按权限召回 Milvus 候选，随后从 MySQL 回查并再次过滤已发布、当前版本、active chunk 和用户权限。
+- 未命中包括无候选、低于相似度阈值、MySQL 回查后无有效来源；未命中会返回固定提示并写入 `missed_questions`。
+- MVP 不做对话持久化，不创建 `conversation_threads`、`conversation_messages`、`rag_answer_sources`。
+- MVP 不持久化员工测验答题记录、分数、排行或统计。
+
+## 已实现 API 边界
+- `GET /health`：服务健康检查。
+- `POST /api/auth/login`：账号密码登录，返回 JWT 和公开用户信息。
+- `GET /api/auth/me`：返回当前登录用户。
+- `GET /api/admin/ping`：管理员权限探针。
+- `POST /api/admin/contents`：管理员创建内容草稿。
+- `GET /api/admin/contents`：管理员内容列表，支持类型、状态、权限级别、分类和分页筛选。
+- `GET /api/admin/contents/{content_id}`：管理员内容详情。
+- `PATCH /api/admin/contents/{content_id}`：管理员编辑草稿字段，不改历史版本。
+- `POST /api/admin/contents/{content_id}/publish`：发布或再发布内容，生成新版本和 active chunk。
+- `POST /api/admin/contents/{content_id}/retry-index`：管理员重试当前内容索引同步。
+- `POST /api/admin/contents/{content_id}/offline`：下线内容并禁用相关 chunk。
+- `GET /api/admin/contents/{content_id}/versions`：管理员查看历史版本。
+- `GET /api/app/must-reads` 与 `GET /api/app/must-reads/{content_id}`：员工最新必读列表和详情。
+- `GET /api/app/scripts` 与 `GET /api/app/scripts/{content_id}`：员工基础话术、标准化话术列表和详情。
+- `POST /api/admin/quiz-questions`、`GET /api/admin/quiz-questions`、`PATCH /api/admin/quiz-questions/{question_id}`：后台测验题管理。
+- `POST /api/admin/quiz-questions/{question_id}/enable` 与 `/disable`：启用或禁用测验题。
+- `GET /api/app/quiz`：员工获取当前权限内 5 到 10 道启用题。
+- `POST /api/app/quiz/submit`：员工提交答案并即时返回解析，不落库答题历史。
+- `POST /api/app/rag/ask`：员工提交 AI 问答，返回基于授权来源的回答或固定未命中提示。
+- `GET /api/admin/missed-questions`：管理员查看未命中问题列表。
+- `POST /api/admin/missed-questions/{question_id}/mark-handled`：管理员将未命中问题标记为已处理。
+
+## 文件职责
+
+### 根目录
+- `.env.example`：安全环境变量占位，只列变量名和本地示例，不包含真实 API Key、数据库密码或 JWT 密钥。
+- `.gitignore`：忽略 `.env`、虚拟环境、`node_modules`、构建产物、Python 缓存和 egg-info 等本地文件。
+- `.gitattributes`：仓库文本属性和换行规则。
+- `AGENTS.md`：项目开发约束、权限规则、必读上下文和 Git 规则。
+- `README.md`：项目简介。
+
+### 后端项目
+- `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 PyMilvus 运行依赖。
+- `backend/app/__init__.py`：后端 Python 包标记。
+- `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员、内容、测验、RAG、未命中问题路由和健康检查。
+
+### 后端核心
+- `backend/app/core/__init__.py`：核心模块包标记。
+- `backend/app/core/config.py`：Pydantic Settings 配置入口，提供数据库、Milvus collection、DashScope、RAG 阈值、JWT 和测试假客户端默认值。
+- `backend/app/core/errors.py`：统一应用错误类型和 JSON 错误响应形状。
+- `backend/app/core/security.py`：Argon2 密码哈希/校验、JWT 生成和解析。
+
+### 后端数据库与迁移
+- `backend/app/db/__init__.py`：数据库模块包标记。
+- `backend/app/db/base.py`：导出 SQLAlchemy `Base`，供模型和迁移共享。
+- `backend/app/db/session.py`：创建 SQLAlchemy engine、session factory、请求级 `get_db` 依赖和 `session_scope`。
+- `backend/alembic.ini`：Alembic 默认配置，默认指向本地 MySQL 占位 URL。
+- `backend/alembic/env.py`：Alembic 迁移运行入口，加载 SQLAlchemy metadata。
+- `backend/alembic/versions/0001_initial_schema.py`：初始表结构迁移，创建用户、内容、版本、chunk、向量索引记录、测验题和未命中问题表。
+- `backend/alembic/versions/0002_add_content_draft_fields.py`：为 `contents` 增加 `draft_summary`、`draft_body`、`draft_payload`，让草稿与已发布版本快照解耦。
+- `backend/alembic/versions/0003_add_content_index_status.py`：为 `contents` 增加 `index_status`，持久化未同步、已同步和同步失败状态。
+
+### 后端领域与模型
+- `backend/app/domain/__init__.py`：领域模块包标记。
+- `backend/app/domain/enums.py`：账号类型、内容权限、内容类型、内容状态、索引状态、测验题状态和未命中问题状态枚举。
+- `backend/app/models/__init__.py`：集中导入模型，确保 Alembic 和 `Base.metadata` 能发现表。
+- `backend/app/models/base.py`：SQLAlchemy declarative base 和通用时间戳 mixin。
+- `backend/app/models/user.py`：`users` 模型，包含账号身份、密码哈希、内容权限和启用状态。
+- `backend/app/models/content.py`：`contents`、`content_versions`、`content_chunks`、`vector_index_records` 模型；`contents` 保存当前草稿和索引状态，`content_versions` 保存发布快照，`content_chunks` 为 RAG 索引候选，`vector_index_records` 记录 Milvus 索引元数据。
+- `backend/app/models/quiz.py`：`quiz_questions` 模型；不包含答题记录表。
+- `backend/app/models/missed_question.py`：`missed_questions` 模型，保留提问时账号类型和内容权限快照。
+
+### 后端 API、Schema 与服务
+- `backend/app/api/__init__.py`：API 模块包标记。
+- `backend/app/api/deps.py`：数据库依赖、当前用户依赖、管理员依赖、内容权限集合计算、无泄露权限错误和外部客户端依赖入口。
+- `backend/app/api/routes/__init__.py`：路由模块包标记。
+- `backend/app/api/routes/admin.py`：管理员权限探针。
+- `backend/app/api/routes/auth.py`：登录接口和当前用户接口。
+- `backend/app/api/routes/content.py`：管理员内容管理、发布后索引同步、重试索引和员工最新必读/话术读取接口。
+- `backend/app/api/routes/quiz.py`：后台测验题管理接口和员工测验获取/提交接口。
+- `backend/app/api/routes/rag.py`：员工 AI 问答接口，调用 RAG 编排服务并返回回答、来源或未命中提示。
+- `backend/app/api/routes/missed_question.py`：后台未命中问题列表和标记已处理接口。
+- `backend/app/schemas/__init__.py`：schema 模块包标记。
+- `backend/app/schemas/auth.py`：登录请求和登录响应模型。
+- `backend/app/schemas/user.py`：用户创建输入和公开用户响应模型。
+- `backend/app/schemas/content.py`：内容创建、更新、管理员响应和分页响应模型，并承载类型相关字段校验。
+- `backend/app/schemas/quiz.py`：测验题创建、更新和员工提交答案模型。
+- `backend/app/schemas/rag.py`：员工 RAG 问题请求模型。
+- `backend/app/services/__init__.py`：服务层包标记。
+- `backend/app/services/content_service.py`：内容创建、更新、列表、发布、下线、历史版本、当前版本 chunk 和员工可见性查询规则。
+- `backend/app/services/quiz_service.py`：测验题创建、更新、启停、列表、员工抽题和响应字典转换规则。
+- `backend/app/services/rag_index_service.py`：内容切片、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
+- `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、候选召回、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
+- `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
+
+### 后端外部集成
+- `backend/app/integrations/__init__.py`：外部集成模块包标记。
+- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实模式 API Key 检查和供应商错误标准化。
+- `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
+
+### 后端测试
+- `backend/tests/conftest.py`：SQLite 临时库、SQLAlchemy session、FastAPI TestClient、用户和鉴权头夹具。
+- `backend/tests/test_config.py`：配置默认值测试，确保测试环境不需要真实密钥。
+- `backend/tests/test_health.py`：健康检查 API 测试。
+- `backend/tests/test_errors.py`：统一错误响应和无堆栈泄露测试。
+- `backend/tests/test_repository_guardrails.py`：阶段 0 文档和 `.env.example` 安全检查。
+- `backend/tests/test_db_session.py`：数据库 session 生命周期测试。
+- `backend/tests/test_domain_enums.py`：账号类型和内容权限输入校验测试。
+- `backend/tests/test_migrations_phase2.py`：Alembic 升级、降级、表结构和非目标表缺失测试；新增迁移后降级验证目标为 `base`。
+- `backend/tests/test_models_phase2.py`：用户唯一性、内容版本关系、chunk/vector 关系、测验题和未命中问题测试。
+- `backend/tests/test_seed_guidance.py`：初始管理员种子说明测试。
+- `backend/tests/test_security_phase3.py`：密码哈希、密码校验、JWT 生成解析和过期测试。
+- `backend/tests/test_auth_api_phase3.py`：登录成功、登录失败、当前用户依赖和管理员依赖 API 测试。
+- `backend/tests/test_permissions_phase3.py`：内容权限过滤辅助和无泄露权限错误测试。
+- `backend/tests/test_admin_content_phase4.py`：管理员内容草稿、筛选分页、编辑、发布、再发布、历史版本、下线和 AI 候选 chunk 测试。
+- `backend/tests/test_employee_content_phase5.py`：员工最新必读、标准话术列表/详情、排序和权限隔离测试。
+- `backend/tests/test_quiz_phase5.py`：后台测验题管理、员工抽题、提交解析、不持久化答题历史和提交权限隔离测试。
+- `backend/tests/test_integrations_phase6.py`：DashScope/Milvus 假客户端、配置边界、错误标准化和元数据过滤测试。
+- `backend/tests/test_rag_index_phase6.py`：切片规则、稳定 hash、索引成功、索引失败和重试索引测试。
+- `backend/tests/test_rag_phase6.py`：RAG 问题 embedding、权限过滤、低分未命中、MySQL 回查、API 成功/未授权/供应商不可用测试。
+- `backend/tests/test_missed_questions_phase6.py`：未命中问题快照、后台列表、标记已处理和非管理员拒绝测试。
+
+### 前端
+- `frontend/package.json`：前端依赖、脚本和 pnpm 包管理声明。
+- `frontend/pnpm-lock.yaml`：前端依赖锁文件。
+- `frontend/pnpm-workspace.yaml`：pnpm 11 构建脚本允许配置。
+- `frontend/index.html`：Vite 应用 HTML 入口。
+- `frontend/vite.config.ts`：Vite + Vue 插件、`@` alias 和本地开发 `/api` 代理配置。
+- `frontend/vitest.config.ts`：Vitest jsdom 测试配置。
+- `frontend/tsconfig.json`：TypeScript 编译配置。
+- `frontend/src/main.ts`：Vue 应用挂载入口，安装 Pinia 和 Router，并注入 API client 的 token 与 401 处理。
+- `frontend/src/App.vue`：根据路由 meta 选择应用区域并渲染路由视图。
+- `frontend/src/components/AppShell.vue`：全局 shell，提供移动/桌面横向溢出约束。
+- `frontend/src/components/EmployeeLayout.vue`：员工端共享布局，展示 AI 问答入口、三个核心入口、当前用户和退出登录。
+- `frontend/src/components/AdminLayout.vue`：后台共享布局，展示内容、测验、账号和未命中问题导航，仅管理员渲染。
+- `frontend/src/components/AppState.vue`：共享空状态、加载状态、权限错误、服务错误和 AI 不可用状态文案。
+- `frontend/src/components/CopyButton.vue`：共享复制按钮，封装剪贴板写入和成功/失败反馈。
+- `frontend/src/router/index.ts`：登录、员工端和后台端路由；包含登录态守卫、管理员守卫、阶段 8 员工真实页面路由和阶段 9 后台占位路径。
+- `frontend/src/stores/auth.ts`：Pinia 认证状态仓库，管理 token、用户身份、账号类型、内容权限级别、会话持久化和退出登录。
+- `frontend/src/api/client.ts`：Axios API client、Bearer token 注入、401 认证错误回调和统一错误归一化。
+- `frontend/src/api/auth.ts`：登录 API 封装，响应字段与后端 `LoginResponse` 对齐。
+- `frontend/src/pages/LoginPage.vue`：登录页，包含账号密码表单、必填校验、登录 API 调用、成功跳转和通用失败提示。
+- `frontend/src/pages/EmployeeHomePage.vue`：员工首页正文区域，承载员工共享布局下的今日入口提示。
+- `frontend/src/pages/AdminHomePage.vue`：后台首页，当前承载后台共享布局和阶段 9 入口占位。
+- `frontend/src/styles/base.css`：全局基础样式和页面宽度约束。
+- `frontend/src/vite-env.d.ts`：Vite 类型声明。
+- `frontend/tests/setup.ts`：Vitest DOM matcher setup。
+- `frontend/tests/auth-store.test.ts`：认证状态持久化、账号身份和退出登录测试。
+- `frontend/tests/router.test.ts`：基础路由解析、员工端认证守卫和后台管理员守卫测试。
+- `frontend/tests/api-client.test.ts`：API base URL、错误归一化、Bearer token 注入和 401 处理测试。
+- `frontend/tests/login-page.test.ts`：登录表单校验、登录成功跳转、通用失败提示和移动端布局约束测试。
+- `frontend/tests/shared-ui.test.ts`：员工/后台布局、全局状态和复制反馈测试。
+- `frontend/tests/app-shell.test.ts`：移动和桌面布局横向溢出约束测试。
+
+### 文档与基础设施
+- `docs/phase-0-guardrails.md`：阶段 0 护栏、工作区边界、测试策略和外部服务测试边界。
+- `docs/local-development.md`：本地后端、前端、MySQL、Milvus 和测试启动说明。
+- `docs/initial-admin.md`：初始管理员账号创建说明，要求通过环境变量或运维输入提供密码。
+- `infra/local-services.md`：本地 MySQL 和 Milvus 主机、端口、角色边界和启动检查。
+- `memory-bank/design-document.md`：产品设计基线。
+- `memory-bank/tech-stack.md`：技术栈推荐和架构约束。
+- `memory-bank/implementation-plan.md`：阶段式实施计划；当前有用户已有未提交改动，本轮未主动修改。
+- `memory-bank/progress.md`：开发进度和验证记录。
+- `memory-bank/architecture.md`：当前架构记忆文件。
+
+## 本地 MySQL 验证记录
+- 2026-06-17 已使用本地 MySQL 创建/复用 `weview_mvp` 并执行 Alembic `upgrade head`。
+- 阶段 4/5 烟测数据包含 `phase45_admin`、`phase45_general`、`phase45_full` 三类账号，以及一条通用最新必读、一条全量标准话术和五道通用测验题。
+- 阶段 4/5 烟测确认：通用用户能看到通用最新必读和通用测验题，看不到全量标准话术；完整权限用户能看到全量标准话术。
+- 阶段 6 已将本地 MySQL 升级到 `0003_add_content_index_status`；烟测数据包含 `phase6_admin`、`phase6_general` 和一条通用 RAG 内容。
+- 阶段 6 烟测确认：内容发布后索引状态为 `synced`，RAG 命中返回带来源的回答，低分未命中返回固定提示并写入后台未命中列表。
+- 真实 Milvus 写入已验证：`localhost:19530` 可连接，`weview_content_chunks` collection 已创建/复用，阶段 6 索引同步流程写入 `content-4-version-4-chunk-4` 后立即检索命中。
+- MySQL root 密码和任何真实密钥不得写入仓库；以上记录只保存库名、账号名和行为结果。
+
+## 阶段 8 前端架构补充
+- 员工端页面已经从阶段 7 的占位入口升级为可操作页面，当前覆盖首页 AI 提问、最新必读、标准话术、巩固测试和 AI 问答结果。
+- `frontend/src/components/EmployeeLayout.vue`：员工端共享布局和全局 AI 提问表单；负责空问题提示、非空问题跳转 `/app/ask`、三入口导航、当前用户展示和退出登录。
+- `frontend/src/pages/EmployeeHomePage.vue`：员工首页正文区域；承载阶段 8 的今日入口提示，具体 AI 表单由 `EmployeeLayout` 负责。
+- `frontend/src/pages/app/MustReadListPage.vue`：员工最新必读列表页；加载 `/api/app/must-reads`，处理 loading、empty、service error，展示发布时间、生效时间和权限标签。
+- `frontend/src/pages/app/MustReadDetailPage.vue`：员工最新必读详情页；加载 `/api/app/must-reads/{contentId}`，展示更新正文和调整要点，403 时清空旧详情并展示无权查看。
+- `frontend/src/pages/app/ScriptsPage.vue`：员工话术列表页；加载 `/api/app/scripts`，按分类筛选，分区展示核心基础话术和标准化话术。
+- `frontend/src/pages/app/ScriptDetailPage.vue`：员工话术详情页；按内容类型展示基础话术正文/要点或标准化话术场景、推荐说法、禁用说法、备注，并复用复制按钮。
+- `frontend/src/pages/app/QuizPage.vue`：员工巩固测试页；加载 `/api/app/quiz`，本地记录选项，提交到 `/api/app/quiz/submit`，只展示即时解析，不持久化分数或历史。
+- `frontend/src/pages/app/AiAnswerPage.vue`：员工 AI 问答结果页；读取路由 query 中的问题，调用 `/api/app/rag/ask`，展示命中回答、来源、复制按钮、固定未命中文案或 AI 不可用状态。
+- `frontend/src/api/content.ts`：员工端内容 API 封装，包含最新必读、话术列表和详情的 TypeScript 类型与请求函数。
+- `frontend/src/api/quiz.ts`：员工端测验 API 封装，包含题目、提交 payload 和提交结果类型。
+- `frontend/src/api/rag.ts`：员工端 RAG API 封装，包含回答来源和命中/未命中响应类型。
+- `frontend/src/utils/format.ts`：前端展示格式工具，负责日期时间截断、权限标签、内容类型标签和 AI 来源详情链接生成。
+- `frontend/vite.config.ts`：除 Vue 插件和 `@` alias 外，新增 dev server `/api` 代理；默认转发到 `http://127.0.0.1:8000`，可通过 `VITE_API_PROXY_TARGET` 覆盖。
+- `.env.example`：前端示例配置已改为 `VITE_API_BASE_URL=/api` 和 `VITE_API_PROXY_TARGET=http://127.0.0.1:8000`，避免本地开发跨域和 API 前缀错位。
+- `frontend/tests/employee-content-phase8.test.ts`：覆盖最新必读和话术页面的列表、详情、权限错误、分类筛选和复制行为。
+- `frontend/tests/employee-quiz-ai-phase8.test.ts`：覆盖员工首页提问、巩固测试、AI 命中、未命中和不可用状态。
+- `docs/frontend-testing-manual.md`：阶段 8 前端手测操作手册，说明启动、登录、手测路径、API Key/Milvus 需求和常见问题。
+- `docs/seed-phase8-manual-data.py`：本地手测数据辅助脚本，从环境变量读取数据库连接和测试密码，创建/更新三类账号、员工端内容和 5 道测验题；不包含真实密码或 API Key。
+
+## 当前验证基线
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `54 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，当前 `36 passed`。
+- 前端构建：`corepack.cmd pnpm build`，当前构建成功。
