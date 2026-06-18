@@ -21,6 +21,8 @@ node_modules/
 dist/
 build/
 .vite/
+playwright-report/
+test-results/
 
 # Logs and local runtime files
 *.log

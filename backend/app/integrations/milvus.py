@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from math import sqrt
 from typing import Any
 
 from app.core.config import Settings
@@ -79,7 +80,11 @@ class FakeMilvusClient:
             candidates = self.search_results
         else:
             candidates = [
-                MilvusSearchHit(primary_key=vector.primary_key, score=1.0, metadata=vector.metadata)
+                MilvusSearchHit(
+                    primary_key=vector.primary_key,
+                    score=self._cosine_similarity(query_vector, vector.vector),
+                    metadata=vector.metadata,
+                )
                 for vector in self.vectors.get(collection_name, [])
             ]
         filtered = [
@@ -89,6 +94,16 @@ class FakeMilvusClient:
             and hit.metadata.get("permission_level") in allowed_permission_levels
         ]
         return sorted(filtered, key=lambda hit: hit.score, reverse=True)[:top_k]
+
+    @staticmethod
+    def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        if len(left) != len(right) or not left:
+            return 0.0
+        left_norm = sqrt(sum(value * value for value in left))
+        right_norm = sqrt(sum(value * value for value in right))
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
 
     def deactivate_by_content(
         self,

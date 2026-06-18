@@ -199,3 +199,33 @@
 - 若引入真实“同步中”状态，需要先扩展后端 `IndexStatus` 枚举和数据库约束，再让索引服务在同步前后更新状态。
 - 管理员账号初始化和自身密码维护继续走运维流程，不要复用员工账号管理入口。
 - 后台新页面继续通过 `frontend/src/api/` 封装请求，并保留后端管理员依赖作为最终权限边界。
+
+## 2026-06-18：阶段 10
+
+### 已完成范围
+- 新增确定性的端到端后端夹具，包含管理员、完整权限员工、通用权限员工，六条跨通用/全量权限的最新必读、基础话术和标准化话术，以及五道通用题和一道全量题。
+- 新增阶段 10 专用 FastAPI 启动器。它只使用 `backend/tmp/phase10-e2e.db` 和进程内假外部客户端，不读取或改动真实 MySQL、Milvus 和 DashScope 数据。
+- 假 Milvus 现在按余弦相似度计算默认检索分数，使正向向量稳定命中、反向向量稳定低于阈值；显式 `search_results` 测试路径保持不变。
+- 新增 Playwright Chromium 配置和五条串行冒烟测试，覆盖管理员发布、通用用户四层权限隔离、完整权限可见与检索、AI 未命中回写后台、测验不持久化。
+- Vitest 发现范围限定到 `frontend/tests/**/*.test.ts`，避免把 Playwright `e2e/*.spec.ts` 当作 jsdom 单测加载。
+- 新增 `docs/mvp-acceptance-checklist.md`，把产品设计文档中的 14 条验收标准映射到自动化测试或真实环境手测。
+
+### 关键实现
+- `backend/app/e2e_fixture.py`：定义阶段 10 固定账号、内容、测验和命中/未命中 AI 假客户端；所有发布夹具都会经过既有内容发布、chunk、embedding、Milvus 抽象和索引记录流程。
+- `backend/e2e_server.py`：重建专用 SQLite 表、加载夹具、把同一组假 DashScope/Milvus 实例注入发布和问答请求，然后在 `127.0.0.1:8010` 启动测试服务。
+- `backend/tests/test_e2e_fixture_phase10.py`：验证三类账号登录、内容权限、题目权限、RAG 命中/未命中和 6 条索引记录。
+- `frontend/playwright.config.ts`：单 worker 启动阶段 10 后端和 `5175` Vite 前端，统一使用 Chromium 执行。
+- `frontend/e2e/mvp-smoke.spec.ts`：通过浏览器和真实 HTTP API 操作页面，不 mock Axios 或 Vue 组件。
+
+### 验证记录
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，结果 `61 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，结果 `43 passed`。
+- 前端构建：`corepack.cmd pnpm build`，结果成功。
+- Playwright：`corepack.cmd pnpm test:e2e`，结果 `5 passed`。
+- 内置 Browser 复验：完整权限账号可同时看到通用级和全量级基础/标准话术；AI 命中页展示通用与全量来源和更新时间；控制台无 warning/error。
+
+### 给后续开发者
+- 阶段 10 专用账号密码和 SQLite 数据只用于自动化，不可作为手工真实环境数据，也不能用于生产。
+- E2E 测试依赖共享的进程内假 Milvus；不要把发布和问答拆到不同测试后端进程，否则向量状态不会共享。
+- `frontend/e2e` 与 `frontend/tests` 分属 Playwright 和 Vitest，新增测试时保持目录与命名边界。
+- 产品验收第 14 条仍需使用真实 MySQL、真实 Milvus 和真实 DashScope 完成手测并记录。

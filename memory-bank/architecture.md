@@ -118,7 +118,11 @@
 ### 后端外部集成
 - `backend/app/integrations/__init__.py`：外部集成模块包标记。
 - `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实模式 API Key 检查和供应商错误标准化。
-- `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
+- `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供按余弦相似度评分的内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
+
+### 端到端测试后端
+- `backend/app/e2e_fixture.py`：阶段 10 确定性夹具定义，创建三类固定测试账号、通用/全量内容、测验题和可控命中/未命中的假 DashScope/Milvus 客户端；发布内容仍复用正式 service 流程。
+- `backend/e2e_server.py`：Playwright 专用后端入口，重建 `backend/tmp/phase10-e2e.db`、加载夹具、注入进程内共享假客户端并监听 `127.0.0.1:8010`；不得用于真实业务运行。
 
 ### 后端测试
 - `backend/tests/conftest.py`：SQLite 临时库、SQLAlchemy session、FastAPI TestClient、用户和鉴权头夹具。
@@ -143,6 +147,7 @@
 - `backend/tests/test_missed_questions_phase6.py`：未命中问题快照、后台列表、标记已处理和非管理员拒绝测试。
 - `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、重复用户名、非管理员拒绝和管理员账号保护测试。
 - `backend/tests/test_admin_support_phase9.py`：阶段 9 后台展示契约测试，覆盖测验关联内容/更新时间和历史版本发布人展示名。
+- `backend/tests/test_e2e_fixture_phase10.py`：阶段 10 后端夹具准备测试，覆盖三类账号登录、跨权限内容/题目、确定性 RAG 命中和未命中、索引记录数量。
 
 ### 前端
 - `frontend/package.json`：前端依赖、脚本和 pnpm 包管理声明。
@@ -151,6 +156,7 @@
 - `frontend/index.html`：Vite 应用 HTML 入口。
 - `frontend/vite.config.ts`：Vite + Vue 插件、`@` alias 和本地开发 `/api` 代理配置。
 - `frontend/vitest.config.ts`：Vitest jsdom 测试配置。
+- `frontend/playwright.config.ts`：阶段 10 Playwright 配置，单 worker 启动专用 FastAPI 与 Vite 服务并使用 Chromium 执行冒烟测试。
 - `frontend/tsconfig.json`：TypeScript 编译配置。
 - `frontend/src/main.ts`：Vue 应用挂载入口，安装 Pinia 和 Router，并注入 API client 的 token 与 401 处理。
 - `frontend/src/App.vue`：根据路由 meta 选择应用区域并渲染路由视图。
@@ -187,11 +193,13 @@
 - `frontend/tests/app-shell.test.ts`：移动和桌面布局横向溢出约束测试。
 - `frontend/tests/admin-content-phase9.test.ts`：后台内容筛选、分页、状态标签、操作入口、发布/下线/索引重试、编辑器字段和历史版本测试。
 - `frontend/tests/admin-operations-phase9.test.ts`：后台测验题、员工账号和未命中问题页面的创建、编辑、启停、重置、禁用、筛选和无统计看板测试。
+- `frontend/e2e/mvp-smoke.spec.ts`：阶段 10 浏览器冒烟测试，覆盖管理员发布、权限隔离、完整权限可见与 AI 检索、未命中回写和测验不持久化。
 
 ### 文档与基础设施
 - `docs/phase-0-guardrails.md`：阶段 0 护栏、工作区边界、测试策略和外部服务测试边界。
 - `docs/local-development.md`：本地后端、前端、MySQL、Milvus 和测试启动说明。
 - `docs/initial-admin.md`：初始管理员账号创建说明，要求通过环境变量或运维输入提供密码。
+- `docs/mvp-acceptance-checklist.md`：将 14 条 MVP 验收标准映射到后端、前端、Playwright 或真实环境手测证据。
 - `infra/local-services.md`：本地 MySQL 和 Milvus 主机、端口、角色边界和启动检查。
 - `memory-bank/design-document.md`：产品设计基线。
 - `memory-bank/tech-stack.md`：技术栈推荐和架构约束。
@@ -243,6 +251,16 @@
 - 本次 Browser 烟测仍不是阶段 10 的正式 Playwright 端到端测试，后续需保留确定性夹具和可重复执行的自动化流程。
 
 ## 当前验证基线
-- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `59 passed`。
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `61 passed`。
 - 前端单测：`corepack.cmd pnpm test:unit`，当前 `43 passed`。
 - 前端构建：`corepack.cmd pnpm build`，当前构建成功。
+- Playwright：`corepack.cmd pnpm test:e2e`，当前 `5 passed`。
+
+## 阶段 10 端到端架构补充
+- 自动化端到端环境与真实手测环境严格分离。阶段 10 使用专用 SQLite 和进程内假客户端，以获得可重复、无外网依赖的权限与业务流程验证。
+- Playwright 通过真实浏览器、Vite 代理和 FastAPI HTTP API 操作系统，不 mock 前端 API 模块。
+- E2E 后端启动时重建专用数据库并加载固定夹具；测试结束后不写入真实 MySQL 或 Milvus。
+- 发布和 RAG 请求必须共享同一个假 Milvus 实例，否则发布请求写入的内存向量无法被后续问答请求召回。
+- 假 Milvus 默认按余弦相似度评分，阶段 10 使用反向 query embedding 制造稳定低分未命中；业务服务仍使用正式相似度阈值和 MySQL 回查规则。
+- Vitest 仅发现 `frontend/tests/**/*.test.ts`，Playwright 仅发现 `frontend/e2e`，两个运行器互不收集对方测试。
+- 真实 MySQL、真实 Milvus、真实 DashScope 的全链路验收不由阶段 10 假客户端替代，必须按完整前端手测说明执行。

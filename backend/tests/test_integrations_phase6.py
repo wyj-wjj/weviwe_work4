@@ -105,6 +105,37 @@ def test_fake_milvus_collection_schema_upsert_search_and_deactivate() -> None:
     )
 
 
+def test_fake_milvus_scores_vectors_by_cosine_similarity() -> None:
+    client = FakeMilvusClient()
+    client.ensure_collection("weview_scripts", dimension=3)
+    client.upsert_vectors(
+        "weview_scripts",
+        [
+            MilvusVector(
+                primary_key="matching",
+                vector=[1.0, 0.0, 0.0],
+                metadata={"permission_level": "general", "is_active": True},
+            ),
+            MilvusVector(
+                primary_key="opposite",
+                vector=[-1.0, 0.0, 0.0],
+                metadata={"permission_level": "general", "is_active": True},
+            ),
+        ],
+    )
+
+    results = client.search(
+        "weview_scripts",
+        query_vector=[1.0, 0.0, 0.0],
+        allowed_permission_levels={"general"},
+        top_k=10,
+    )
+
+    assert [hit.primary_key for hit in results] == ["matching", "opposite"]
+    assert results[0].score == pytest.approx(1.0)
+    assert results[1].score == pytest.approx(-1.0)
+
+
 def test_milvus_factory_uses_real_client_only_when_fake_clients_are_disabled() -> None:
     fake_settings = Settings(use_fake_external_clients=True)
     real_settings = Settings(use_fake_external_clients=False, milvus_host="127.0.0.1", milvus_port=19530)
