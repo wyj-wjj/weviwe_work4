@@ -8,14 +8,63 @@ const props = defineProps<{
 
 const feedback = ref('')
 
+function fallbackCopy(text: string): boolean {
+  const activeElement = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  const selection = window.getSelection()
+  const savedRanges = selection
+    ? Array.from(
+        { length: selection.rangeCount },
+        (_, index) => selection.getRangeAt(index).cloneRange(),
+      )
+    : []
+  const textarea = document.createElement('textarea')
+  textarea.dataset.copyFallback = 'true'
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+
+  try {
+    textarea.focus()
+    textarea.select()
+    return typeof document.execCommand === 'function' && document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+
+    try {
+      activeElement?.focus({ preventScroll: true })
+    } catch {
+      // The previous focus target may no longer be focusable.
+    }
+
+    if (selection) {
+      try {
+        selection.removeAllRanges()
+        savedRanges.forEach((range) => selection.addRange(range))
+      } catch {
+        // The selected nodes may have been removed while the copy attempt ran.
+      }
+    }
+  }
+}
+
 async function copyText() {
   feedback.value = ''
 
   try {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error('Clipboard API unavailable')
+    }
     await navigator.clipboard.writeText(props.text)
     feedback.value = '已复制'
   } catch {
-    feedback.value = '复制失败，请重试'
+    feedback.value = fallbackCopy(props.text) ? '已复制' : '复制失败，请重试'
   }
 }
 </script>

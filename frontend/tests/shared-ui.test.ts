@@ -9,6 +9,42 @@ import { useAuthStore, type AuthUser } from '../src/stores/auth'
 import AppState from '../src/components/AppState.vue'
 import CopyButton from '../src/components/CopyButton.vue'
 
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+const originalExecCommandDescriptor = Object.getOwnPropertyDescriptor(document, 'execCommand')
+
+function setClipboard(writeText: ReturnType<typeof vi.fn>) {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+}
+
+function setExecCommand(execCommand: ReturnType<typeof vi.fn>) {
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: execCommand,
+  })
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  window.getSelection()?.removeAllRanges()
+  document.querySelectorAll('[data-copy-test-fixture]').forEach((element) => element.remove())
+  document.querySelectorAll('[data-copy-fallback]').forEach((element) => element.remove())
+
+  if (originalClipboardDescriptor) {
+    Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor)
+  } else {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  }
+
+  if (originalExecCommandDescriptor) {
+    Object.defineProperty(document, 'execCommand', originalExecCommandDescriptor)
+  } else {
+    Reflect.deleteProperty(document, 'execCommand')
+  }
+})
+
 function renderWithAuth(component: object, user: AuthUser) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -74,42 +110,56 @@ test.each([
   expect(getByText(message)).toBeInTheDocument()
 })
 
-test('copy button shows success and recoverable failure feedback', async () => {
-  const originalClipboard = navigator.clipboard
+test('copy button reports success when Clipboard API resolves', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  setClipboard(writeText)
+  const view = render(CopyButton, { props: { text: '推荐说法' } })
 
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-      writeText: vi.fn().mockResolvedValue(undefined),
-    },
-  })
+  await fireEvent.click(view.getByRole('button', { name: '复制' }))
 
-  const { getByRole, getByText, rerender } = render(CopyButton, {
-    props: {
-      text: '推荐说法',
-    },
-  })
+  await waitFor(() => expect(view.getByText('已复制')).toBeInTheDocument())
+  expect(writeText).toHaveBeenCalledWith('推荐说法')
+})
 
-  await fireEvent.click(getByRole('button', { name: '复制' }))
-  await waitFor(() => {
-    expect(getByText('已复制')).toBeInTheDocument()
-  })
+test('copy button falls back to execCommand and restores the page state when Clipboard API rejects', async () => {
+  setClipboard(vi.fn().mockRejectedValue(new Error('denied')))
+  const execCommand = vi.fn().mockReturnValue(true)
+  setExecCommand(execCommand)
 
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-      writeText: vi.fn().mockRejectedValue(new Error('denied')),
-    },
-  })
-  await rerender({ text: '推荐说法' })
-  await fireEvent.click(getByRole('button', { name: '复制' }))
+  const focusedInput = document.createElement('input')
+  focusedInput.dataset.copyTestFixture = 'focus'
+  document.body.appendChild(focusedInput)
+  focusedInput.focus()
 
-  await waitFor(() => {
-    expect(getByText('复制失败，请重试')).toBeInTheDocument()
-  })
+  const selectedText = document.createElement('p')
+  selectedText.dataset.copyTestFixture = 'selection'
+  selectedText.textContent = '保留选择'
+  document.body.appendChild(selectedText)
+  const range = document.createRange()
+  range.selectNodeContents(selectedText)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
 
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: originalClipboard,
-  })
+  const view = render(CopyButton, { props: { text: '推荐说法' } })
+  await fireEvent.click(view.getByRole('button', { name: '复制' }))
+
+  await waitFor(() => expect(view.getByText('已复制')).toBeInTheDocument())
+  expect(execCommand).toHaveBeenCalledWith('copy')
+  expect(document.querySelector('[data-copy-fallback]')).toBeNull()
+  expect(document.activeElement).toBe(focusedInput)
+  expect(window.getSelection()?.toString()).toBe('保留选择')
+})
+
+test('copy button reports failure when Clipboard API and execCommand both fail', async () => {
+  setClipboard(vi.fn().mockRejectedValue(new Error('denied')))
+  const execCommand = vi.fn().mockReturnValue(false)
+  setExecCommand(execCommand)
+  const view = render(CopyButton, { props: { text: '推荐说法' } })
+
+  await fireEvent.click(view.getByRole('button', { name: '复制' }))
+
+  await waitFor(() => expect(view.getByText('复制失败，请重试')).toBeInTheDocument())
+  expect(execCommand).toHaveBeenCalledWith('copy')
+  expect(document.querySelector('[data-copy-fallback]')).toBeNull()
 })
