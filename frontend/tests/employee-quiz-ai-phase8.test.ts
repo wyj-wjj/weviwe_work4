@@ -384,15 +384,42 @@ test('AI page aborts the active request when it unmounts', async () => {
   await Promise.resolve()
 })
 
-test('employee AI form does not route again for the same normalized question', async () => {
-  mockedAskRag.mockResolvedValue({ hit: true, answer: '当前回答', sources: [] })
+test('AI page releases a completed request before it unmounts', async () => {
+  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValue(request.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=已完成问题')
+  await waitFor(() => expect(mockedAskRag).toHaveBeenCalled())
+  const signal = mockedAskRag.mock.calls[0]?.[1]
+
+  request.resolve({ hit: true, answer: '已完成回答', sources: [] })
+  await waitFor(() => expect(view.getByText('已完成回答')).toBeInTheDocument())
+  expect(signal?.aborted).toBe(false)
+
+  view.unmount()
+
+  expect(signal?.aborted).toBe(false)
+})
+
+test('employee AI form routes the same normalized question again after AI is unavailable', async () => {
+  mockedAskRag.mockRejectedValue({
+    status: 503,
+    code: 'ai_unavailable',
+  })
 
   const view = await renderAppPage(AiAnswerPage, '/app/ask?question=同一个问题')
-  await waitFor(() => expect(view.getByText('当前回答')).toBeInTheDocument())
+  await waitFor(() => {
+    expect(view.getByText('智能问答暂不可用，请稍后重试')).toBeInTheDocument()
+  })
   const push = vi.spyOn(view.router, 'push')
 
   await fireEvent.update(view.getByLabelText('AI 问题'), '  同一个问题  ')
   await fireEvent.click(view.getByRole('button', { name: '提问' }))
 
-  expect(push).not.toHaveBeenCalled()
+  expect(push).toHaveBeenCalledWith({
+    name: 'employee-ai-answer',
+    query: {
+      question: '同一个问题',
+    },
+  })
 })

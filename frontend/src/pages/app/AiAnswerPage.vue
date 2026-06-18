@@ -46,6 +46,10 @@ watch(
       if (sequence !== requestSequence || controller.signal.aborted) return
       const apiError = error as { code?: string; status?: number }
       state.value = apiError.code === 'ai_unavailable' || apiError.status === 503 ? 'ai-unavailable' : 'service'
+    } finally {
+      if (activeController === controller) {
+        activeController = null
+      }
     }
   },
   { immediate: true },

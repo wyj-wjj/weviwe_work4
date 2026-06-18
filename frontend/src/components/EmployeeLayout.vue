@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
-const route = useRoute()
 const router = useRouter()
 const question = ref('')
 const questionError = ref('')
@@ -23,14 +22,6 @@ function submitQuestion() {
 
   if (!normalizedQuestion) {
     questionError.value = '请输入要查询的问题'
-    return
-  }
-
-  const currentQuestion = route.query.question
-  const normalizedCurrentQuestion = (
-    Array.isArray(currentQuestion) ? (currentQuestion[0] ?? '') : (currentQuestion ?? '')
-  ).trim()
-  if (route.name === 'employee-ai-answer' && normalizedCurrentQuestion === normalizedQuestion) {
     return
   }
 
