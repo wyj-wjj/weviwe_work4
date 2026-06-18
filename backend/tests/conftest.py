@@ -6,9 +6,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.deps import get_dashscope_client, get_milvus_client
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import get_db
+from app.integrations.dashscope import FakeDashScopeClient
+from app.integrations.milvus import FakeMilvusClient
 from app.main import app
 from app.models.user import User
 
@@ -38,6 +41,8 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient()
+    app.dependency_overrides[get_milvus_client] = lambda: FakeMilvusClient()
     try:
         yield TestClient(app)
     finally:
