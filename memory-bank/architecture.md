@@ -6,7 +6,7 @@
 - MySQL 是唯一权威业务数据源；自动化测试使用 SQLite 临时库验证模型、迁移和 API 行为，不改变生产目标。
 - Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status`。
 - Milvus 通过后端集成边界访问；自动化测试使用内存假客户端，真实模式使用 PyMilvus `MilvusClient` 写入本地 Milvus，Milvus 只作为向量索引，不保存权威正文。
-- DashScope 只能由后端调用；自动化测试使用假聊天和假 embedding 客户端，不调用真实模型服务。
+- DashScope 只能由后端调用；真实模式通过 OpenAI-compatible `/embeddings` 和 `/chat/completions` 调用，自动化测试使用假客户端或 `httpx.MockTransport`，不默认调用真实模型服务。
 
 ## 架构决策
 - 后端保持 FastAPI 单体，不拆微服务，不引入 LangChain、LangGraph、Celery、Redis、Kubernetes 或对象存储。
@@ -60,7 +60,7 @@
 - `README.md`：项目简介。
 
 ### 后端项目
-- `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 PyMilvus 运行依赖。
+- `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 httpx 与 PyMilvus 运行依赖。
 - `backend/app/__init__.py`：后端 Python 包标记。
 - `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员探针、内容、测验、RAG、未命中问题、账号管理路由和健康检查。
 
@@ -75,7 +75,7 @@
 - `backend/app/db/base.py`：导出 SQLAlchemy `Base`，供模型和迁移共享。
 - `backend/app/db/session.py`：创建 SQLAlchemy engine、session factory、请求级 `get_db` 依赖和 `session_scope`。
 - `backend/alembic.ini`：Alembic 默认配置，默认指向本地 MySQL 占位 URL。
-- `backend/alembic/env.py`：Alembic 迁移运行入口，加载 SQLAlchemy metadata。
+- `backend/alembic/env.py`：Alembic 迁移运行入口，加载 SQLAlchemy metadata；默认配置仍是占位 URL 时，从仓库根目录 `.env` 读取 `DATABASE_URL`，测试显式 URL 不被覆盖。
 - `backend/alembic/versions/0001_initial_schema.py`：初始表结构迁移，创建用户、内容、版本、chunk、向量索引记录、测验题和未命中问题表。
 - `backend/alembic/versions/0002_add_content_draft_fields.py`：为 `contents` 增加 `draft_summary`、`draft_body`、`draft_payload`，让草稿与已发布版本快照解耦。
 - `backend/alembic/versions/0003_add_content_index_status.py`：为 `contents` 增加 `index_status`，持久化未同步、已同步和同步失败状态。
@@ -115,9 +115,13 @@
 - `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
 - `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置和禁用；拒绝普通账号管理入口操作管理员账号。
 
+### 后端运维命令
+- `backend/app/cli/__init__.py`：后端运维 CLI 包标记。
+- `backend/app/cli/create_admin.py`：首个管理员创建/更新命令，从环境变量或交互输入读取账号信息，使用 Argon2 哈希密码并写入 MySQL；不负责员工账号或业务测试数据。
+
 ### 后端外部集成
 - `backend/app/integrations/__init__.py`：外部集成模块包标记。
-- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实模式 API Key 检查和供应商错误标准化。
+- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实 OpenAI-compatible HTTP 客户端、严格来源提示词、API Key 检查和超时/认证/响应错误标准化。
 - `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供按余弦相似度评分的内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
 
 ### 端到端测试后端
@@ -148,6 +152,9 @@
 - `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、重复用户名、非管理员拒绝和管理员账号保护测试。
 - `backend/tests/test_admin_support_phase9.py`：阶段 9 后台展示契约测试，覆盖测验关联内容/更新时间和历史版本发布人展示名。
 - `backend/tests/test_e2e_fixture_phase10.py`：阶段 10 后端夹具准备测试，覆盖三类账号登录、跨权限内容/题目、确定性 RAG 命中和未命中、索引记录数量。
+- `backend/tests/test_dashscope_http_phase11.py`：使用 `httpx.MockTransport` 验证真实 DashScope embedding/chat 请求、响应解析和供应商错误映射，不访问外网。
+- `backend/tests/test_documentation_phase11.py`：检查本地开发、宝塔/ECS 部署和真实全链路手册包含阶段 11 必需配置与命令。
+- `backend/tests/test_initial_admin_cli_phase11.py`：验证初始管理员 CLI 创建/更新、Argon2 密码哈希、管理员角色和重新启用行为。
 
 ### 前端
 - `frontend/package.json`：前端依赖、脚本和 pnpm 包管理声明。
@@ -197,8 +204,9 @@
 
 ### 文档与基础设施
 - `docs/phase-0-guardrails.md`：阶段 0 护栏、工作区边界、测试策略和外部服务测试边界。
-- `docs/local-development.md`：本地后端、前端、MySQL、Milvus 和测试启动说明。
-- `docs/initial-admin.md`：初始管理员账号创建说明，要求通过环境变量或运维输入提供密码。
+- `docs/local-development.md`：从根目录配置 `.env`、安装依赖、启动 MySQL/Milvus、迁移、创建管理员、启动前后端和运行三类测试的完整说明。
+- `docs/initial-admin.md`：初始管理员账号创建说明和可执行 CLI 命令，要求通过环境变量或交互输入提供密码。
+- `docs/deployment-bt-ecs.md`：宝塔与 ECS 部署说明，明确前端静态 HTML、FastAPI 本地监听、Nginx 反向代理、MySQL、Milvus Docker 和 DashScope 后端配置边界。
 - `docs/mvp-acceptance-checklist.md`：将 14 条 MVP 验收标准映射到后端、前端、Playwright 或真实环境手测证据。
 - `infra/local-services.md`：本地 MySQL 和 Milvus 主机、端口、角色边界和启动检查。
 - `memory-bank/design-document.md`：产品设计基线。
@@ -234,7 +242,7 @@
 - `.env.example`：前端示例配置已改为 `VITE_API_BASE_URL=/api` 和 `VITE_API_PROXY_TARGET=http://127.0.0.1:8000`，避免本地开发跨域和 API 前缀错位。
 - `frontend/tests/employee-content-phase8.test.ts`：覆盖最新必读和话术页面的列表、详情、权限错误、分类筛选和复制行为。
 - `frontend/tests/employee-quiz-ai-phase8.test.ts`：覆盖员工首页提问、巩固测试、AI 命中、未命中和不可用状态。
-- `docs/frontend-testing-manual.md`：阶段 8 前端手测操作手册，说明启动、登录、手测路径、API Key/Milvus 需求和常见问题。
+- `docs/frontend-testing-manual.md`：真实全链路前端操作手册，要求除首个管理员外全部数据经管理员前端和 FastAPI 写入真实 MySQL/Milvus，并覆盖后台、员工权限、版本、测验、真实 AI 命中/未命中和只读落库核验。
 - `docs/seed-phase8-manual-data.py`：本地手测数据辅助脚本，从环境变量读取数据库连接和测试密码，创建/更新三类账号、员工端内容和 5 道测验题；不包含真实密码或 API Key。
 
 ## 阶段 9 后台架构补充
@@ -251,7 +259,7 @@
 - 本次 Browser 烟测仍不是阶段 10 的正式 Playwright 端到端测试，后续需保留确定性夹具和可重复执行的自动化流程。
 
 ## 当前验证基线
-- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `61 passed`。
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `71 passed`。
 - 前端单测：`corepack.cmd pnpm test:unit`，当前 `43 passed`。
 - 前端构建：`corepack.cmd pnpm build`，当前构建成功。
 - Playwright：`corepack.cmd pnpm test:e2e`，当前 `5 passed`。
@@ -264,3 +272,14 @@
 - 假 Milvus 默认按余弦相似度评分，阶段 10 使用反向 query embedding 制造稳定低分未命中；业务服务仍使用正式相似度阈值和 MySQL 回查规则。
 - Vitest 仅发现 `frontend/tests/**/*.test.ts`，Playwright 仅发现 `frontend/e2e`，两个运行器互不收集对方测试。
 - 真实 MySQL、真实 Milvus、真实 DashScope 的全链路验收不由阶段 10 假客户端替代，必须按完整前端手测说明执行。
+
+## 阶段 11 文档与真实外部服务补充
+- `DashScopeHttpClient` 使用 `DASHSCOPE_BASE_URL` 拼接 `/embeddings` 和 `/chat/completions`，请求头只在后端携带 Bearer API Key。
+- embedding 请求使用 `text-embedding-v4` 和 `encoding_format=float`；2026-06-18 本机真实响应维度为 1024。
+- chat 请求使用 `qwen-plus`，system prompt 要求只能依据已授权来源，不得补充未提供业务结论；返回值只暴露标准化回答和 token usage。
+- 自动化测试通过注入 `httpx.Client(MockTransport)` 验证 HTTP 契约，不消耗真实模型额度。
+- Alembic 默认占位 URL 会被根目录 `.env` 中的 `DATABASE_URL` 替换；测试提供的 SQLite URL 和显式非占位 URL保持优先。
+- 首个管理员由运维 CLI 直接写 MySQL，这是启动引导例外；员工、内容、测验、发布、索引和未命中测试数据必须经前端/API 创建。
+- 前端生产部署是静态 `dist`，FastAPI 监听 `127.0.0.1` 并由 Nginx/宝塔代理 `/api`；SQLAlchemy 只是 ORM，MySQL 仍是唯一业务数据库。
+- 真实手测应为 `text-embedding-v4` 使用新 Milvus collection，避免与旧 3 维假向量 collection 冲突。
+- 2026-06-18 已完成真实浏览器链路：管理员前端创建账号和内容，FastAPI 写入 MySQL，发布后 `text-embedding-v4` 生成 1024 维向量并写入 `weview_content_chunks_codex_real_v4_20260618`，通用员工问答由 Milvus 命中、MySQL 回查和 `qwen-plus` 生成带来源回答；无关问题写入后台未命中列表。

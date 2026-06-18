@@ -68,3 +68,18 @@ def test_alembic_can_downgrade_to_base_without_orphaning_version_rows(sqlite_url
             version_rows = connection.execute(text("select count(*) from alembic_version")).scalar_one()
         assert version_rows == 0
     engine.dispose()
+
+
+def test_default_alembic_config_uses_database_url_environment(
+    sqlite_url: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", sqlite_url)
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(sqlite_url)
+    assert "users" in inspect(engine).get_table_names()
+    engine.dispose()

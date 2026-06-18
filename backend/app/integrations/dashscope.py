@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from app.core.config import Settings
 
 
@@ -74,14 +76,110 @@ class FakeDashScopeClient:
 
 
 class DashScopeHttpClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, http_client: httpx.Client | None = None) -> None:
         self.settings = settings
+        self.http_client = http_client
+
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self.settings.dashscope_base_url.rstrip('/')}{path}"
+        headers = {
+            "Authorization": f"Bearer {self.settings.dashscope_api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            if self.http_client is not None:
+                response = self.http_client.post(url, headers=headers, json=payload)
+            else:
+                with httpx.Client(timeout=60.0) as client:
+                    response = client.post(url, headers=headers, json=payload)
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError("DashScope request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderResponseError("DashScope request failed.") from exc
+
+        if response.status_code in {401, 403}:
+            raise ProviderAuthenticationError("DashScope authentication failed.")
+        if response.status_code >= 400:
+            raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ProviderResponseError("DashScope returned invalid JSON.") from exc
+        if not isinstance(data, dict):
+            raise ProviderResponseError("DashScope returned an invalid response object.")
+        return data
 
     def embed_text(self, text: str) -> EmbeddingResult:
-        raise ProviderConfigurationError("Real DashScope embedding calls are not implemented in automated MVP tests.")
+        data = self._post_json(
+            "/embeddings",
+            {
+                "model": self.settings.dashscope_embedding_model,
+                "input": text,
+                "encoding_format": "float",
+            },
+        )
+        items = data.get("data")
+        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+            raise ProviderResponseError("DashScope embedding response is missing data.")
+        vector = items[0].get("embedding")
+        if not isinstance(vector, list) or not vector or not all(isinstance(value, (int, float)) for value in vector):
+            raise ProviderResponseError("DashScope embedding response contains an invalid vector.")
+        model = data.get("model") or self.settings.dashscope_embedding_model
+        if not isinstance(model, str):
+            raise ProviderResponseError("DashScope embedding response contains an invalid model name.")
+        return EmbeddingResult(vector=[float(value) for value in vector], model=model)
 
     def generate_answer(self, *, question: str, contexts: list[dict[str, Any]]) -> ChatGeneration:
-        raise ProviderConfigurationError("Real DashScope chat calls are not implemented in automated MVP tests.")
+        source_blocks = []
+        for index, context in enumerate(contexts, start=1):
+            source = context.get("source") if isinstance(context.get("source"), dict) else {}
+            title = source.get("title") or f"来源 {index}"
+            text = context.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            source_blocks.append(f"[来源 {index}] {title}\n{text.strip()}")
+        if not source_blocks:
+            raise ProviderResponseError("No authorized context was provided for answer generation.")
+
+        data = self._post_json(
+            "/chat/completions",
+            {
+                "model": self.settings.dashscope_chat_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是企业官方话术助手。只能依据提供的已授权来源回答，"
+                            "不得补充来源中没有的业务结论，不得推测，不得泄露未提供的内容。"
+                            "如果来源不足以回答，应明确说明现有来源不足。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"用户问题：{question}\n\n"
+                            "以下内容均已通过当前账号权限和有效状态校验：\n\n"
+                            + "\n\n".join(source_blocks)
+                        ),
+                    },
+                ],
+                "stream": False,
+            },
+        )
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ProviderResponseError("DashScope chat response is missing choices.")
+        message = choices[0].get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderResponseError("DashScope chat response contains no answer text.")
+        raw_usage = data.get("usage")
+        usage = (
+            {key: int(value) for key, value in raw_usage.items() if isinstance(value, (int, float))}
+            if isinstance(raw_usage, dict)
+            else {}
+        )
+        return ChatGeneration(answer_text=content.strip(), usage=usage)
 
 
 def create_dashscope_client(settings: Settings | None = None) -> FakeDashScopeClient | DashScopeHttpClient:

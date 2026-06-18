@@ -1,12 +1,19 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.core.config import Settings
 from app.db.base import Base
 from app.models import Content, ContentChunk, ContentVersion, MissedQuestion, QuizQuestion, User, VectorIndexRecord
 
 config = context.config
+configured_url = config.get_main_option("sqlalchemy.url")
+if "local_placeholder" in configured_url:
+    repository_env = Path(__file__).resolve().parents[2] / ".env"
+    settings = Settings(_env_file=repository_env)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

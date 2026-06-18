@@ -17,7 +17,7 @@
 | 11 | 巩固测试提交后只在当前页面展示对错和解析 | Playwright 测验即时解析用例 | 自动化通过 |
 | 12 | 巩固测试不写入答题记录，不保存分数 | `backend/tests/test_migrations_phase2.py`；Playwright 刷新后无历史用例 | 自动化通过 |
 | 13 | 历史版本可在后台查看，但不参与当前检索 | `backend/tests/test_admin_content_phase4.py`；`frontend/tests/admin-content-phase9.test.ts` | 自动化通过 |
-| 14 | 本地环境完整跑通前端、后端、MySQL、Milvus 和阿里云模型调用 | `docs/frontend-testing-manual.md` 真实全链路操作与核验步骤 | 待真实环境手测记录 |
+| 14 | 本地环境完整跑通前端、后端、MySQL、Milvus 和阿里云模型调用 | `docs/frontend-testing-manual.md` 真实全链路操作与核验步骤 | 2026-06-18 真实全链路通过 |
 
 ## 阶段 10 自动化命令
 
@@ -37,3 +37,16 @@ corepack.cmd pnpm test:e2e
 - 前端单元/组件：`43 passed`。
 - Playwright：`5 passed`。
 - 前端生产构建：成功。
+
+## 2026-06-18 真实服务检查
+
+- MySQL 数据库：`weview_mvp`。
+- Milvus Standalone 容器健康，真实业务 collection：`weview_content_chunks_codex_real_v4_20260618`。
+- DashScope embedding：`text-embedding-v4`，实际返回 1024 维。
+- DashScope chat：`qwen-plus`，返回回答与 prompt/completion/total token usage。
+- 浏览器从管理员前端创建 `codex_real_general` 和“Codex真实链路风险提示话术”，全部经 FastAPI 写入 MySQL。
+- 管理员前端发布后内容为 `v1 / synced`；MySQL `vector_index_records` 记录模型、1024 维和目标 collection。
+- Milvus 使用真实问题 embedding 检索命中该内容 ID。
+- 通用员工从前端提问后收到 `qwen-plus` 回答，来源为该已发布话术，浏览器控制台无 warning/error。
+- 无关问题返回固定未命中文案，并出现在管理员未命中问题列表。
+- 验证链路：`浏览器 -> Vue -> FastAPI -> MySQL -> DashScope embedding -> Milvus -> MySQL 回查 -> qwen-plus -> 浏览器`。

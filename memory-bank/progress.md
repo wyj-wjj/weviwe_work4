@@ -229,3 +229,41 @@
 - E2E 测试依赖共享的进程内假 Milvus；不要把发布和问答拆到不同测试后端进程，否则向量状态不会共享。
 - `frontend/e2e` 与 `frontend/tests` 分属 Playwright 和 Vitest，新增测试时保持目录与命名边界。
 - 产品验收第 14 条仍需使用真实 MySQL、真实 Milvus 和真实 DashScope 完成手测并记录。
+
+## 2026-06-18：阶段 11 与真实全链路手册
+
+### 已完成范围
+- 实现真实 `DashScopeHttpClient`，通过 OpenAI-compatible `/embeddings` 调用 `text-embedding-v4`，通过 `/chat/completions` 调用 `qwen-plus`。
+- 真实聊天提示词只允许使用已经过权限和有效状态校验的来源，不允许补充来源中没有的业务结论。
+- 将 httpx 移入后端运行依赖，并用 `httpx.MockTransport` 覆盖请求体、鉴权头、响应解析、401/403、超时、HTTP 错误和异常响应。
+- Alembic 默认占位 URL 现在会从仓库根目录 `.env` 读取 `DATABASE_URL`；测试显式 SQLite URL 保持优先。
+- 新增初始管理员 CLI，支持创建或更新管理员、Argon2 哈希密码和重新启用。
+- 重写本地开发说明和完整前端真实链路测试手册，新增宝塔/ECS 部署说明。
+- 完整手册要求除首个管理员外，员工账号、内容、测验、发布、索引和未命中问题全部从前端经 FastAPI 写入真实 MySQL/Milvus。
+
+### 关键实现
+- `backend/app/integrations/dashscope.py`：真实 HTTP 调用、严格上下文消息、标准化输出和错误映射。
+- `backend/alembic/env.py`：仅当 `alembic.ini` 仍为占位 URL 时加载根目录 `.env`。
+- `backend/app/cli/create_admin.py`：首个管理员运维入口。
+- `docs/local-development.md`：完整本地安装、配置、迁移、启动和测试命令。
+- `docs/deployment-bt-ecs.md`：静态前端、Python 后端、Nginx/宝塔、MySQL、Milvus、DashScope 部署边界。
+- `docs/frontend-testing-manual.md`：从管理员前端创建真实账号/内容/测验、发布索引、员工权限、AI 命中/未命中和落库核验。
+
+### 验证记录
+- DashScope 单元契约：embedding/chat 和错误映射测试通过。
+- 真实 DashScope：`text-embedding-v4` 返回 1024 维向量；`qwen-plus` 返回非空回答和 prompt/completion/total token usage。
+- 真实 Milvus：将 1024 维真实 embedding 写入 `weview_codex_phase11_smoke_v4` 后检索命中 1 条，随后删除测试实体。
+- 文档契约：本地开发、宝塔/ECS、真实前端全链路三组检查通过。
+- 后端全量：`..\.venv\Scripts\python.exe -m pytest`，结果 `71 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，结果 `43 passed`。
+- 前端构建：`corepack.cmd pnpm build`，结果成功。
+- Playwright：`corepack.cmd pnpm test:e2e`，结果 `5 passed`。
+- 真实浏览器全链路：管理员前端创建 `codex_real_general` 和“Codex真实链路风险提示话术”，发布后显示 `v1 / synced`；MySQL 记录 current version 和 1024 维索引审计，Milvus 检索命中同一内容，通用员工获得 `qwen-plus` 回答和正确来源。
+- 真实未命中：无关问题返回固定提示，并进入管理员未命中问题列表，账号和权限快照正确。
+- 安全检查：误写入 `.env.example` 的本地数据库凭据已恢复为占位值，未进入暂存区或提交。
+
+### 给后续开发者
+- 后续可按 `docs/frontend-testing-manual.md` 使用自定义测试账号重复执行，不要复用或传播本次临时账号密码。
+- 不要为绕过本地凭据问题把真实手测改回 SQLite 或假客户端。
+- 不要复用旧 3 维 Milvus collection；真实 `text-embedding-v4` 使用独立 1024 维 collection。
+- 真实服务检查结果只能记录模型名、维度、collection 和行为，不记录密码、API Key、JWT 或完整 token。
