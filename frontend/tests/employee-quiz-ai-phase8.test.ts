@@ -90,6 +90,7 @@ test('quiz page renders five to ten questions and records each selected answer s
       options: ['A', 'B', 'C'],
       explanation: null,
       related_content_id: null,
+      related_content_type: null,
       permission_level: 'general',
       status: 'enabled',
     })),
@@ -118,6 +119,7 @@ test('quiz submit sends selected answers, disables duplicate submit, and renders
         options: ['A', 'B'],
         explanation: null,
         related_content_id: 21,
+        related_content_type: 'must_read',
         permission_level: 'general',
         status: 'enabled',
       },
@@ -152,6 +154,7 @@ test('quiz submit sends selected answers, disables duplicate submit, and renders
         correct_answer: 'B',
         explanation: '应先说明适用范围。',
         related_content_id: 21,
+        related_content_type: 'must_read',
       },
     ],
   })
@@ -161,7 +164,98 @@ test('quiz submit sends selected answers, disables duplicate submit, and renders
   })
   expect(getByText('正确答案：B')).toBeInTheDocument()
   expect(getByText('应先说明适用范围。')).toBeInTheDocument()
-  expect(getByRole('link', { name: '查看关联话术' })).toHaveAttribute('href', '/app/scripts/21')
+  expect(getByRole('link', { name: '查看关联话术' })).toHaveAttribute(
+    'href',
+    '/app/must-reads/21',
+  )
+})
+
+test('quiz result links route script types and hide relations without a content type', async () => {
+  mockedGetQuiz.mockResolvedValue({
+    items: [
+      {
+        id: 1,
+        question: '基础话术题',
+        options: ['A', 'B'],
+        explanation: null,
+        related_content_id: 31,
+        related_content_type: 'base_script',
+        permission_level: 'general',
+        status: 'enabled',
+      },
+      {
+        id: 2,
+        question: '标准话术题',
+        options: ['A', 'B'],
+        explanation: null,
+        related_content_id: 32,
+        related_content_type: 'standard_script',
+        permission_level: 'general',
+        status: 'enabled',
+      },
+      {
+        id: 3,
+        question: '无类型关联题',
+        options: ['A', 'B'],
+        explanation: null,
+        related_content_id: 33,
+        related_content_type: null,
+        permission_level: 'general',
+        status: 'enabled',
+      },
+    ],
+  })
+  mockedSubmitQuiz.mockResolvedValue({
+    results: [
+      {
+        question_id: 1,
+        selected_answer: 'A',
+        is_correct: true,
+        correct_answer: 'A',
+        explanation: null,
+        related_content_id: 31,
+        related_content_type: 'base_script',
+      },
+      {
+        question_id: 2,
+        selected_answer: 'A',
+        is_correct: true,
+        correct_answer: 'A',
+        explanation: null,
+        related_content_id: 32,
+        related_content_type: 'standard_script',
+      },
+      {
+        question_id: 3,
+        selected_answer: 'A',
+        is_correct: true,
+        correct_answer: 'A',
+        explanation: null,
+        related_content_id: 33,
+        related_content_type: null,
+      },
+    ],
+  })
+
+  const { getAllByRole, getByLabelText, getByRole, getByText } = await renderAppPage(
+    QuizPage,
+    '/app/quiz',
+  )
+
+  await waitFor(() => {
+    expect(getByText('无类型关联题')).toBeInTheDocument()
+  })
+  await fireEvent.click(getByLabelText('基础话术题 A'))
+  await fireEvent.click(getByLabelText('标准话术题 A'))
+  await fireEvent.click(getByLabelText('无类型关联题 A'))
+  await fireEvent.click(getByRole('button', { name: '提交答案' }))
+
+  await waitFor(() => {
+    expect(getAllByRole('link', { name: '查看关联话术' })).toHaveLength(2)
+  })
+  expect(
+    getAllByRole('link', { name: '查看关联话术' }).map((link) => link.getAttribute('href')),
+  ).toEqual(['/app/scripts/31', '/app/scripts/32'])
 })
 
 test('quiz page does not render score history, ranking, or statistics entries', async () => {

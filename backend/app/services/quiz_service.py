@@ -4,23 +4,49 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.domain.enums import QuestionStatus
+from app.domain.enums import ContentStatus, QuestionStatus
+from app.models.content import Content
 from app.models.quiz import QuizQuestion
 from app.models.user import User
 from app.services.content_service import visible_levels_for
 
 
-def quiz_to_dict(question: QuizQuestion, *, include_answer: bool = True) -> dict[str, Any]:
+def visible_related_content(question: QuizQuestion, user: User) -> Content | None:
+    content = question.related_content
+    if (
+        content is None
+        or content.status != ContentStatus.PUBLISHED.value
+        or content.current_version_id is None
+        or content.permission_level not in visible_levels_for(user)
+    ):
+        return None
+    return content
+
+
+def related_content_projection(question: QuizQuestion, *, user: User | None = None) -> dict[str, Any]:
+    content = question.related_content if user is None else visible_related_content(question, user)
+    return {
+        "related_content_id": question.related_content_id if user is None else (content.id if content else None),
+        "related_content_title": content.title if content else None,
+        "related_content_type": content.content_type if content else None,
+    }
+
+
+def quiz_to_dict(
+    question: QuizQuestion,
+    *,
+    include_answer: bool = True,
+    user: User | None = None,
+) -> dict[str, Any]:
     payload = {
         "id": question.id,
         "question": question.question,
         "options": question.options,
         "explanation": question.explanation,
-        "related_content_id": question.related_content_id,
-        "related_content_title": question.related_content.title if question.related_content else None,
         "permission_level": question.permission_level,
         "status": question.status,
         "updated_at": question.updated_at,
+        **related_content_projection(question, user=user),
     }
     if include_answer:
         payload["answer"] = question.answer
@@ -72,6 +98,13 @@ def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.permission_level.in_(visible_levels_for(user)))
         .order_by(QuizQuestion.id.asc())
-        .limit(10)
     )
-    return list(db.scalars(stmt).all())
+    items = list(db.scalars(stmt).all())
+    if user.account_type not in {"admin", "full_user"}:
+        return items[:10]
+
+    full_items = [item for item in items if item.permission_level == "full"]
+    general_items = [item for item in items if item.permission_level == "general"]
+    selected = full_items[:1] + general_items
+    selected.extend(full_items[1:])
+    return selected[:10]

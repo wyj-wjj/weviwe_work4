@@ -14,6 +14,7 @@ from app.services.quiz_service import (
     list_employee_quiz_questions,
     list_quiz_questions,
     quiz_to_dict,
+    related_content_projection,
     set_quiz_status,
     update_quiz_question,
 )
@@ -81,7 +82,12 @@ def app_get_quiz(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     questions = list_employee_quiz_questions(db, current_user)
-    return {"items": [quiz_to_dict(question, include_answer=False) for question in questions]}
+    return {
+        "items": [
+            quiz_to_dict(question, include_answer=False, user=current_user)
+            for question in questions
+        ]
+    }
 
 
 @router.post("/api/app/quiz/submit")
@@ -97,6 +103,7 @@ def app_submit_quiz(
         question = allowed_by_id.get(answer.question_id)
         if question is None:
             raise AppError(code="not_found", message="Question not found.", status_code=404)
+        relation = related_content_projection(question, user=current_user)
         results.append(
             {
                 "question_id": question.id,
@@ -104,7 +111,7 @@ def app_submit_quiz(
                 "is_correct": answer.selected_answer == question.answer,
                 "correct_answer": question.answer,
                 "explanation": question.explanation,
-                "related_content_id": question.related_content_id,
+                **relation,
             }
         )
     return {"results": results}

@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 import { getQuiz, submitQuiz, type QuizQuestion, type QuizSubmitResult } from '../../api/quiz'
 import AppState from '../../components/AppState.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
+import { sourceDetailPath } from '../../utils/format'
 
 const questions = ref<QuizQuestion[]>([])
 const results = ref<QuizSubmitResult[]>([])
@@ -24,6 +25,14 @@ function optionLabel(option: string | { label?: string; value?: string }): strin
 
 function resultFor(questionId: number) {
   return results.value.find((result) => result.question_id === questionId)
+}
+
+function relatedPathFor(questionId: number): string | null {
+  const result = resultFor(questionId)
+  if (!result?.related_content_id || !result.related_content_type) {
+    return null
+  }
+  return sourceDetailPath(result.related_content_type, result.related_content_id)
 }
 
 async function loadQuiz() {
@@ -92,8 +101,8 @@ onMounted(loadQuiz)
               {{ resultFor(question.id)?.explanation }}
             </p>
             <RouterLink
-              v-if="resultFor(question.id)?.related_content_id"
-              :to="`/app/scripts/${resultFor(question.id)?.related_content_id}`"
+              v-if="relatedPathFor(question.id)"
+              :to="relatedPathFor(question.id) ?? ''"
             >
               查看关联话术
             </RouterLink>

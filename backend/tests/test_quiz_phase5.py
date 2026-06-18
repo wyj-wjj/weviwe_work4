@@ -1,14 +1,22 @@
 from sqlalchemy import inspect
 
 from app.models.quiz import QuizQuestion
+from test_admin_content_phase4 import base_payload, must_read_payload, standard_payload
 
 
-def quiz_payload(index: int, *, permission_level: str = "general", status: str = "enabled"):
+def quiz_payload(
+    index: int,
+    *,
+    permission_level: str = "general",
+    status: str = "enabled",
+    related_content_id: int | None = None,
+):
     return {
         "question": f"第 {index} 题应该如何处理？",
         "options": ["确认需求", "直接报价", "结束沟通"],
         "answer": "确认需求",
         "explanation": "先确认需求，再进入推荐。",
+        "related_content_id": related_content_id,
         "permission_level": permission_level,
         "status": status,
     }
@@ -25,6 +33,15 @@ def create_quiz_questions(client, admin_headers, count: int, *, permission_level
         assert response.status_code == 201
         ids.append(response.json()["id"])
     return ids
+
+
+def create_published_content(client, admin_headers, payload):
+    created = client.post("/api/admin/contents", json=payload, headers=admin_headers)
+    assert created.status_code == 201
+    content_id = created.json()["id"]
+    published = client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+    assert published.status_code == 200
+    return content_id
 
 
 def test_admin_can_create_edit_enable_disable_and_list_quiz_questions(client, admin_headers):
@@ -60,22 +77,112 @@ def test_employee_quiz_returns_five_to_ten_visible_enabled_questions(
     general_user_headers,
     full_user_headers,
 ):
-    create_quiz_questions(client, admin_headers, 6, permission_level="general")
-    create_quiz_questions(client, admin_headers, 6, permission_level="full")
+    general_ids = create_quiz_questions(client, admin_headers, 12, permission_level="general")
+    full_ids = create_quiz_questions(client, admin_headers, 1, permission_level="full")
     client.post("/api/admin/quiz-questions", json=quiz_payload(99, status="disabled"), headers=admin_headers)
 
     general = client.get("/api/app/quiz", headers=general_user_headers)
     assert general.status_code == 200
     general_items = general.json()["items"]
-    assert 5 <= len(general_items) <= 10
+    assert len(general_items) == 10
+    assert [item["id"] for item in general_items] == general_ids[:10]
     assert {item["permission_level"] for item in general_items} == {"general"}
     assert all("answer" not in item for item in general_items)
 
     full = client.get("/api/app/quiz", headers=full_user_headers)
     assert full.status_code == 200
     full_items = full.json()["items"]
-    assert 5 <= len(full_items) <= 10
+    assert len(full_items) == 10
     assert {item["permission_level"] for item in full_items} == {"general", "full"}
+    assert [item["id"] for item in full_items] == full_ids + general_ids[:9]
+
+    repeated = client.get("/api/app/quiz", headers=full_user_headers)
+    assert [item["id"] for item in repeated.json()["items"]] == [item["id"] for item in full_items]
+
+
+def test_employee_quiz_projects_only_visible_published_related_content(
+    client,
+    admin_headers,
+    general_user_headers,
+):
+    base_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="可见基础话术", permission_level="general"),
+    )
+    standard_id = create_published_content(
+        client,
+        admin_headers,
+        standard_payload(title="可见标准话术", permission_level="general"),
+    )
+    must_read_id = create_published_content(
+        client,
+        admin_headers,
+        must_read_payload(title="可见最新必读", permission_level="general"),
+    )
+    offline_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="已下线关联内容", permission_level="general"),
+    )
+    offline = client.post(f"/api/admin/contents/{offline_id}/offline", headers=admin_headers)
+    assert offline.status_code == 200
+    full_id = create_published_content(
+        client,
+        admin_headers,
+        standard_payload(title="无权关联内容", permission_level="full"),
+    )
+
+    relation_cases = [
+        (base_id, "base_script"),
+        (standard_id, "standard_script"),
+        (must_read_id, "must_read"),
+        (offline_id, None),
+        (full_id, None),
+        (None, None),
+    ]
+    question_ids = []
+    for index, (related_content_id, _expected_type) in enumerate(relation_cases, start=1):
+        created = client.post(
+            "/api/admin/quiz-questions",
+            json=quiz_payload(index, related_content_id=related_content_id),
+            headers=admin_headers,
+        )
+        assert created.status_code == 201
+        question_ids.append(created.json()["id"])
+
+    response = client.get("/api/app/quiz", headers=general_user_headers)
+    assert response.status_code == 200
+    items_by_id = {item["id"]: item for item in response.json()["items"]}
+
+    for question_id, (related_content_id, expected_type) in zip(question_ids, relation_cases, strict=True):
+        item = items_by_id[question_id]
+        assert item["related_content_type"] == expected_type
+        if expected_type is None:
+            assert item["related_content_id"] is None
+            assert item["related_content_title"] is None
+        else:
+            assert item["related_content_id"] == related_content_id
+
+    assert "已下线关联内容" not in response.text
+    assert "无权关联内容" not in response.text
+
+    submitted = client.post(
+        "/api/app/quiz/submit",
+        json={
+            "answers": [
+                {"question_id": question_id, "selected_answer": "确认需求"}
+                for question_id in question_ids
+            ]
+        },
+        headers=general_user_headers,
+    )
+    assert submitted.status_code == 200
+    results_by_id = {item["question_id"]: item for item in submitted.json()["results"]}
+    for question_id, (related_content_id, expected_type) in zip(question_ids, relation_cases, strict=True):
+        result = results_by_id[question_id]
+        assert result["related_content_type"] == expected_type
+        assert result["related_content_id"] == (related_content_id if expected_type else None)
 
 
 def test_quiz_submit_returns_explanations_without_persisting_attempts(client, admin_headers, general_user_headers, db_session):

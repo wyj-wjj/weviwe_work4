@@ -1,11 +1,14 @@
 import { apiClient } from './client'
 
+export type QuizRelatedContentType = 'base_script' | 'standard_script' | 'must_read'
+
 export interface QuizQuestion {
   id: number
   question: string
   options: Array<string | { label?: string; value?: string }>
   explanation: string | null
   related_content_id: number | null
+  related_content_type: QuizRelatedContentType | null
   permission_level: 'general' | 'full'
   status: string
 }
@@ -28,6 +31,7 @@ export interface QuizSubmitResult {
   correct_answer: string
   explanation: string | null
   related_content_id: number | null
+  related_content_type: QuizRelatedContentType | null
 }
 
 export interface QuizSubmitResponse {
