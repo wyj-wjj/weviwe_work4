@@ -143,6 +143,8 @@ def admin_list_versions(
                 "effective_at": version.effective_at,
                 "expired_at": version.expired_at,
                 "created_by": version.created_by,
+                "created_by_name": version.creator.display_name if version.creator else None,
+                "permission_level": version.content.permission_level,
             }
             for version in versions
         ]

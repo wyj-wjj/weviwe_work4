@@ -162,3 +162,40 @@
 - 阶段 9 后台页面可以直接复用当前 API client、AppState、CopyButton 和 Vite proxy 配置。
 - 员工端 AI 成功命中依赖真实 DashScope、Milvus 和索引同步；阶段 8 手测脚本只负责业务数据，不负责跨进程 fake Milvus 索引。
 - 若继续补充前端页面，请把新 API 封装放在 `frontend/src/api/`，不要在 Vue 页面里直接拼 axios 实例或绕过统一错误处理。
+
+## 2026-06-18：阶段 9
+
+### 已完成范围
+- 实现后台内容列表、筛选、分页、状态标签和按状态显示的编辑、发布、下线、历史版本、索引重试入口。
+- 实现后台内容编辑器，覆盖通用字段、标准化话术专属字段、最新必读专属字段，以及新建/编辑草稿流程。
+- 实现发布确认、发布结果、下线确认、历史版本和索引重试界面。
+- 实现后台测验题列表与编辑器，支持新建、编辑、启用和禁用。
+- 实现后台账号列表、新建、编辑、密码重置和禁用；员工账号管理入口只维护 `general_user` 和 `full_user`，管理员账号只读。
+- 实现后台未命中问题列表、状态筛选和标记已处理；未引入统计看板、图表或排行。
+- 新增最小后端账号管理 API，并补充测验题和历史版本的后台展示字段。
+
+### 关键实现
+- 后台页面统一复用 `AdminLayout`、`AppState`、`apiClient` 和全局后台样式，不创建独立 Axios 实例。
+- 后台内容、测验、账号和未命中 API 分别封装在 `frontend/src/api/admin-content.ts`、`admin-quiz.ts`、`admin-users.ts`、`admin-missed-questions.ts`。
+- 后台真实页面位于 `frontend/src/pages/admin/`；路由增加内容新建、编辑和历史版本子路由。
+- 后端新增 `backend/app/api/routes/user.py` 和 `backend/app/services/user_service.py`，提供员工账号的创建、分页列表、编辑、密码重置和禁用。
+- 后端账号管理不返回密码或密码哈希；密码重置只返回成功标志，前端一次性提示管理员安全通知用户。
+- 后端拒绝通过员工账号管理入口创建、提升、编辑、重置或禁用管理员账号。
+- 内容历史接口新增 `created_by_name`。当前数据模型没有单独保存历史权限快照，因此历史页权限暂来自内容当前权限级别。
+- 索引状态界面兼容 `not_synced`、`syncing`、`synced`、`failed`；当前后端持久化枚举仍为前三者中的 `not_synced`、`synced`、`failed`。
+
+### 验证记录
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，结果 `59 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，结果 `43 passed`。
+- 前端构建：`corepack.cmd pnpm build`，结果成功生成 `dist/`。
+- 差异检查：`git diff --check` 无空白错误，仅提示既有文件换行格式将在 Git 后续处理时规范化。
+- 浏览器烟测补充完成：使用内置 Browser 打开 `http://127.0.0.1:5173`，通过临时 SQLite 后端完成管理员登录、后台首页、内容筛选、内容编辑器动态字段、历史版本、测验题、账号和未命中页面验证；浏览器控制台无 warning/error。
+- 响应式检查：桌面后台布局正常；599px 窄屏业务页无全局横向溢出，表格使用内部横向滚动。后台首页窄屏下深色导航区域偏高，属于后续可优化的视觉问题。
+- 烟测结束后已停止临时 FastAPI 进程并删除 `backend/phase9-browser-smoke.db`，未改动真实 MySQL 数据。
+
+### 给后续开发者
+- 阶段 10 Playwright 冒烟测试应优先覆盖管理员创建/发布内容、账号禁用后登录失败、测验题启停和未命中问题处理。
+- 若要准确展示历史版本“发布当时的权限级别”，需要新增迁移把权限快照写入 `content_versions`。
+- 若引入真实“同步中”状态，需要先扩展后端 `IndexStatus` 枚举和数据库约束，再让索引服务在同步前后更新状态。
+- 管理员账号初始化和自身密码维护继续走运维流程，不要复用员工账号管理入口。
+- 后台新页面继续通过 `frontend/src/api/` 封装请求，并保留后端管理员依赖作为最终权限边界。

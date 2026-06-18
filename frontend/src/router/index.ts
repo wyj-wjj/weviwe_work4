@@ -6,6 +6,12 @@ import {
 } from 'vue-router'
 
 import AdminHomePage from '../pages/AdminHomePage.vue'
+import ContentEditorPage from '../pages/admin/ContentEditorPage.vue'
+import ContentHistoryPage from '../pages/admin/ContentHistoryPage.vue'
+import ContentListPage from '../pages/admin/ContentListPage.vue'
+import MissedQuestionsPage from '../pages/admin/MissedQuestionsPage.vue'
+import QuizQuestionsPage from '../pages/admin/QuizQuestionsPage.vue'
+import UsersPage from '../pages/admin/UsersPage.vue'
 import AiAnswerPage from '../pages/app/AiAnswerPage.vue'
 import EmployeeHomePage from '../pages/EmployeeHomePage.vue'
 import LoginPage from '../pages/LoginPage.vue'
@@ -78,25 +84,43 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/admin/contents',
     name: 'admin-contents',
-    component: AdminHomePage,
+    component: ContentListPage,
+    meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/admin/contents/new',
+    name: 'admin-content-new',
+    component: ContentEditorPage,
+    meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/admin/contents/:contentId/edit',
+    name: 'admin-content-edit',
+    component: ContentEditorPage,
+    meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/admin/contents/:contentId/versions',
+    name: 'admin-content-versions',
+    component: ContentHistoryPage,
     meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
   },
   {
     path: '/admin/quiz-questions',
     name: 'admin-quiz-questions',
-    component: AdminHomePage,
+    component: QuizQuestionsPage,
     meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
   },
   {
     path: '/admin/users',
     name: 'admin-users',
-    component: AdminHomePage,
+    component: UsersPage,
     meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
   },
   {
     path: '/admin/missed-questions',
     name: 'admin-missed-questions',
-    component: AdminHomePage,
+    component: MissedQuestionsPage,
     meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
   },
 ]

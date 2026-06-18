@@ -44,6 +44,11 @@
 - `POST /api/app/rag/ask`：员工提交 AI 问答，返回基于授权来源的回答或固定未命中提示。
 - `GET /api/admin/missed-questions`：管理员查看未命中问题列表。
 - `POST /api/admin/missed-questions/{question_id}/mark-handled`：管理员将未命中问题标记为已处理。
+- `POST /api/admin/users`：管理员创建通用权限或完整权限员工账号。
+- `GET /api/admin/users`：管理员分页查看账号列表；管理员账号在前端只读。
+- `PATCH /api/admin/users/{user_id}`：管理员编辑员工展示名、账号类型、内容权限和启用状态。
+- `POST /api/admin/users/{user_id}/reset-password`：管理员重置员工密码，只返回成功标志。
+- `POST /api/admin/users/{user_id}/disable`：管理员禁用员工账号；禁用后登录和已有 token 请求均会被拒绝。
 
 ## 文件职责
 
@@ -57,7 +62,7 @@
 ### 后端项目
 - `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 PyMilvus 运行依赖。
 - `backend/app/__init__.py`：后端 Python 包标记。
-- `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员、内容、测验、RAG、未命中问题路由和健康检查。
+- `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员探针、内容、测验、RAG、未命中问题、账号管理路由和健康检查。
 
 ### 后端核心
 - `backend/app/core/__init__.py`：核心模块包标记。
@@ -91,22 +96,24 @@
 - `backend/app/api/routes/__init__.py`：路由模块包标记。
 - `backend/app/api/routes/admin.py`：管理员权限探针。
 - `backend/app/api/routes/auth.py`：登录接口和当前用户接口。
-- `backend/app/api/routes/content.py`：管理员内容管理、发布后索引同步、重试索引和员工最新必读/话术读取接口。
+- `backend/app/api/routes/content.py`：管理员内容管理、发布后索引同步、重试索引和员工最新必读/话术读取接口；历史版本响应补充发布人展示名和权限展示字段。
 - `backend/app/api/routes/quiz.py`：后台测验题管理接口和员工测验获取/提交接口。
 - `backend/app/api/routes/rag.py`：员工 AI 问答接口，调用 RAG 编排服务并返回回答、来源或未命中提示。
 - `backend/app/api/routes/missed_question.py`：后台未命中问题列表和标记已处理接口。
+- `backend/app/api/routes/user.py`：后台员工账号创建、分页列表、编辑、密码重置和禁用接口；全部依赖管理员鉴权。
 - `backend/app/schemas/__init__.py`：schema 模块包标记。
 - `backend/app/schemas/auth.py`：登录请求和登录响应模型。
-- `backend/app/schemas/user.py`：用户创建输入和公开用户响应模型。
+- `backend/app/schemas/user.py`：用户创建、编辑、密码重置输入和公开用户响应模型；员工密码至少 8 位，并校验账号类型和内容权限组合。
 - `backend/app/schemas/content.py`：内容创建、更新、管理员响应和分页响应模型，并承载类型相关字段校验。
 - `backend/app/schemas/quiz.py`：测验题创建、更新和员工提交答案模型。
 - `backend/app/schemas/rag.py`：员工 RAG 问题请求模型。
 - `backend/app/services/__init__.py`：服务层包标记。
 - `backend/app/services/content_service.py`：内容创建、更新、列表、发布、下线、历史版本、当前版本 chunk 和员工可见性查询规则。
-- `backend/app/services/quiz_service.py`：测验题创建、更新、启停、列表、员工抽题和响应字典转换规则。
+- `backend/app/services/quiz_service.py`：测验题创建、更新、启停、列表、员工抽题和响应字典转换规则；后台响应包含关联内容标题和更新时间。
 - `backend/app/services/rag_index_service.py`：内容切片、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
 - `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、候选召回、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
 - `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
+- `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置和禁用；拒绝普通账号管理入口操作管理员账号。
 
 ### 后端外部集成
 - `backend/app/integrations/__init__.py`：外部集成模块包标记。
@@ -134,6 +141,8 @@
 - `backend/tests/test_rag_index_phase6.py`：切片规则、稳定 hash、索引成功、索引失败和重试索引测试。
 - `backend/tests/test_rag_phase6.py`：RAG 问题 embedding、权限过滤、低分未命中、MySQL 回查、API 成功/未授权/供应商不可用测试。
 - `backend/tests/test_missed_questions_phase6.py`：未命中问题快照、后台列表、标记已处理和非管理员拒绝测试。
+- `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、重复用户名、非管理员拒绝和管理员账号保护测试。
+- `backend/tests/test_admin_support_phase9.py`：阶段 9 后台展示契约测试，覆盖测验关联内容/更新时间和历史版本发布人展示名。
 
 ### 前端
 - `frontend/package.json`：前端依赖、脚本和 pnpm 包管理声明。
@@ -150,14 +159,24 @@
 - `frontend/src/components/AdminLayout.vue`：后台共享布局，展示内容、测验、账号和未命中问题导航，仅管理员渲染。
 - `frontend/src/components/AppState.vue`：共享空状态、加载状态、权限错误、服务错误和 AI 不可用状态文案。
 - `frontend/src/components/CopyButton.vue`：共享复制按钮，封装剪贴板写入和成功/失败反馈。
-- `frontend/src/router/index.ts`：登录、员工端和后台端路由；包含登录态守卫、管理员守卫、阶段 8 员工真实页面路由和阶段 9 后台占位路径。
+- `frontend/src/router/index.ts`：登录、员工端和后台端路由；包含登录态守卫、管理员守卫、阶段 8 员工页面，以及阶段 9 内容列表/新建/编辑/历史、测验、账号和未命中真实页面路由。
 - `frontend/src/stores/auth.ts`：Pinia 认证状态仓库，管理 token、用户身份、账号类型、内容权限级别、会话持久化和退出登录。
 - `frontend/src/api/client.ts`：Axios API client、Bearer token 注入、401 认证错误回调和统一错误归一化。
 - `frontend/src/api/auth.ts`：登录 API 封装，响应字段与后端 `LoginResponse` 对齐。
+- `frontend/src/api/admin-content.ts`：后台内容 API 和 TypeScript 契约，覆盖列表筛选分页、详情、创建、编辑、发布、下线、历史版本和索引重试。
+- `frontend/src/api/admin-quiz.ts`：后台测验题 API 和类型，覆盖列表、新建、编辑、启用和禁用。
+- `frontend/src/api/admin-users.ts`：后台员工账号 API 和类型，覆盖列表、新建、编辑、密码重置和禁用。
+- `frontend/src/api/admin-missed-questions.ts`：后台未命中问题 API 和类型，覆盖状态筛选列表和标记已处理。
 - `frontend/src/pages/LoginPage.vue`：登录页，包含账号密码表单、必填校验、登录 API 调用、成功跳转和通用失败提示。
 - `frontend/src/pages/EmployeeHomePage.vue`：员工首页正文区域，承载员工共享布局下的今日入口提示。
-- `frontend/src/pages/AdminHomePage.vue`：后台首页，当前承载后台共享布局和阶段 9 入口占位。
-- `frontend/src/styles/base.css`：全局基础样式和页面宽度约束。
+- `frontend/src/pages/AdminHomePage.vue`：后台首页，只提供后台模块入口提示；具体业务由 `/admin/*` 子页面承载。
+- `frontend/src/pages/admin/ContentListPage.vue`：后台内容列表，负责筛选、分页、状态标签、操作可见性、发布确认、下线确认和索引重试。
+- `frontend/src/pages/admin/ContentEditorPage.vue`：后台内容新建/编辑表单，按内容类型生成结构化载荷，保存后返回内容列表。
+- `frontend/src/pages/admin/ContentHistoryPage.vue`：后台历史版本页，展示版本号、标题、发布时间、发布人、权限和正文快照。
+- `frontend/src/pages/admin/QuizQuestionsPage.vue`：后台测验题列表与内联编辑器，支持新建、编辑和启停。
+- `frontend/src/pages/admin/UsersPage.vue`：后台账号列表与内联编辑器，支持员工账号新建、编辑、密码重置和禁用；管理员账号只读。
+- `frontend/src/pages/admin/MissedQuestionsPage.vue`：后台未命中问题列表，支持状态筛选和标记已处理，不包含统计看板。
+- `frontend/src/styles/base.css`：全局基础样式、页面宽度约束，以及阶段 9 后台表格、筛选器、表单、状态标签、分页和响应式样式。
 - `frontend/src/vite-env.d.ts`：Vite 类型声明。
 - `frontend/tests/setup.ts`：Vitest DOM matcher setup。
 - `frontend/tests/auth-store.test.ts`：认证状态持久化、账号身份和退出登录测试。
@@ -166,6 +185,8 @@
 - `frontend/tests/login-page.test.ts`：登录表单校验、登录成功跳转、通用失败提示和移动端布局约束测试。
 - `frontend/tests/shared-ui.test.ts`：员工/后台布局、全局状态和复制反馈测试。
 - `frontend/tests/app-shell.test.ts`：移动和桌面布局横向溢出约束测试。
+- `frontend/tests/admin-content-phase9.test.ts`：后台内容筛选、分页、状态标签、操作入口、发布/下线/索引重试、编辑器字段和历史版本测试。
+- `frontend/tests/admin-operations-phase9.test.ts`：后台测验题、员工账号和未命中问题页面的创建、编辑、启停、重置、禁用、筛选和无统计看板测试。
 
 ### 文档与基础设施
 - `docs/phase-0-guardrails.md`：阶段 0 护栏、工作区边界、测试策略和外部服务测试边界。
@@ -174,7 +195,7 @@
 - `infra/local-services.md`：本地 MySQL 和 Milvus 主机、端口、角色边界和启动检查。
 - `memory-bank/design-document.md`：产品设计基线。
 - `memory-bank/tech-stack.md`：技术栈推荐和架构约束。
-- `memory-bank/implementation-plan.md`：阶段式实施计划；当前有用户已有未提交改动，本轮未主动修改。
+- `memory-bank/implementation-plan.md`：阶段式实施计划；本轮按阶段 9 执行，未修改计划文件。
 - `memory-bank/progress.md`：开发进度和验证记录。
 - `memory-bank/architecture.md`：当前架构记忆文件。
 
@@ -208,7 +229,20 @@
 - `docs/frontend-testing-manual.md`：阶段 8 前端手测操作手册，说明启动、登录、手测路径、API Key/Milvus 需求和常见问题。
 - `docs/seed-phase8-manual-data.py`：本地手测数据辅助脚本，从环境变量读取数据库连接和测试密码，创建/更新三类账号、员工端内容和 5 道测验题；不包含真实密码或 API Key。
 
+## 阶段 9 后台架构补充
+- 后台继续位于同一个 Vue SPA 和同一个 FastAPI 单体中，没有新增服务或中间件。
+- 前端后台页面负责交互和展示；管理员权限、员工账号可管理范围、密码哈希、内容状态和索引操作合法性以后端为最终边界。
+- 后台请求按内容、测验、账号、未命中问题拆分为四个 API 模块，页面不直接拼 Axios 配置，继续复用 Bearer token 注入、401 清理会话和统一错误归一化。
+- 账号管理是阶段 9 唯一新增的后端业务边界。它只管理员工账号，不承担管理员初始化或管理员密码维护；管理员账号继续由运维流程创建和维护。
+- 密码重置由管理员输入新临时密码，后端只保存 Argon2 哈希并返回 `{"reset": true}`；前端不会读取或展示数据库密码哈希。
+- 后台内容发布继续调用既有同步索引流程；发布成功但索引失败时，内容保持可见，后台提示 AI 检索暂不可用并提供重试入口。
+- 历史版本的正文、标题和结构化载荷来自不可变 `content_versions`；当前版本表尚未保存权限快照，所以历史页显示的权限级别暂取 `contents.permission_level` 当前值。
+- 前端可展示 `syncing` 标签作为未来兼容值，但当前数据库 `IndexStatus` 只持久化 `not_synced`、`synced`、`failed`。
+- 自动化验证覆盖后端 API/服务、前端组件和生产构建；2026-06-18 已使用内置 Browser 和临时 SQLite 后端完成阶段 9 管理员登录、内容、历史、测验、账号和未命中页面烟测，浏览器控制台无 warning/error。
+- 599px 窄屏下后台业务页无全局横向溢出，宽表格由页面内部滚动容器承载；后台首页的深色导航区域偏高，是已知视觉优化点。
+- 本次 Browser 烟测仍不是阶段 10 的正式 Playwright 端到端测试，后续需保留确定性夹具和可重复执行的自动化流程。
+
 ## 当前验证基线
-- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `54 passed`。
-- 前端单测：`corepack.cmd pnpm test:unit`，当前 `36 passed`。
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `59 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，当前 `43 passed`。
 - 前端构建：`corepack.cmd pnpm build`，当前构建成功。

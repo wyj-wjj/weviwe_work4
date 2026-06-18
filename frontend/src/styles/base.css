@@ -29,3 +29,265 @@ body {
 .page-employee {
   max-width: 720px;
 }
+
+.admin-page {
+  color: #1f2933;
+  min-width: 0;
+}
+
+.admin-page__title {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.admin-page__title h2,
+.admin-page__title h3,
+.admin-card h3 {
+  margin: 0;
+}
+
+.admin-page__title p {
+  color: #52606d;
+  margin: 6px 0 0;
+}
+
+.admin-button,
+.admin-actions button,
+.admin-link,
+.admin-table td > button {
+  border: 1px solid #9fb3c8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2933;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  justify-content: center;
+  padding: 8px 12px;
+  text-decoration: none;
+}
+
+.admin-button--primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.admin-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.admin-filters,
+.admin-form {
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 18px;
+  padding: 16px;
+}
+
+.admin-filters {
+  align-items: end;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto;
+}
+
+.admin-filters--compact {
+  grid-template-columns: minmax(180px, 280px) auto;
+  justify-content: start;
+}
+
+.admin-form label,
+.admin-filters label,
+.admin-reset-panel label {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-form input,
+.admin-form select,
+.admin-form textarea,
+.admin-filters input,
+.admin-filters select,
+.admin-reset-panel input {
+  border: 1px solid #bcccdc;
+  border-radius: 6px;
+  font: inherit;
+  min-height: 38px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.admin-form textarea {
+  resize: vertical;
+}
+
+.admin-form__wide,
+.admin-form__actions,
+.admin-form .admin-error {
+  grid-column: 1 / -1;
+}
+
+.admin-form__actions,
+.admin-actions,
+.admin-pagination,
+.admin-reset-panel {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-panel,
+.admin-reset-panel {
+  margin-bottom: 18px;
+}
+
+.admin-reset-panel {
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.admin-checkbox {
+  align-items: center;
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+}
+
+.admin-checkbox input {
+  width: auto;
+}
+
+.admin-notice,
+.admin-error {
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.admin-notice {
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.admin-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.admin-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.admin-table {
+  background: #ffffff;
+  border-collapse: collapse;
+  min-width: 880px;
+  width: 100%;
+}
+
+.admin-table th,
+.admin-table td {
+  border-bottom: 1px solid #d9e2ec;
+  padding: 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-table th {
+  background: #f0f4f8;
+  color: #334e68;
+}
+
+.admin-actions button,
+.admin-link,
+.admin-table td > button {
+  font-size: 13px;
+  padding: 5px 8px;
+}
+
+.status-tag {
+  background: #e5e7eb;
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 13px;
+  padding: 4px 9px;
+}
+
+.status-tag[data-status='synced'] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-tag[data-status='failed'] {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-tag[data-status='syncing'] {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.admin-pagination {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.admin-card-list {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-card {
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.admin-card header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.admin-card strong,
+.admin-card p {
+  color: #52606d;
+}
+
+.admin-card pre {
+  background: #f8fafc;
+  border-radius: 6px;
+  font: inherit;
+  margin: 12px 0 0;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .admin-filters,
+  .admin-form {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-form__wide,
+  .admin-form__actions,
+  .admin-form .admin-error {
+    grid-column: auto;
+  }
+
+  .admin-page__title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -17,8 +17,10 @@ def quiz_to_dict(question: QuizQuestion, *, include_answer: bool = True) -> dict
         "options": question.options,
         "explanation": question.explanation,
         "related_content_id": question.related_content_id,
+        "related_content_title": question.related_content.title if question.related_content else None,
         "permission_level": question.permission_level,
         "status": question.status,
+        "updated_at": question.updated_at,
     }
     if include_answer:
         payload["answer"] = question.answer
