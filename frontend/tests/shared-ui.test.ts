@@ -19,6 +19,10 @@ function setClipboard(writeText: ReturnType<typeof vi.fn>) {
   })
 }
 
+function removeClipboard() {
+  Reflect.deleteProperty(navigator, 'clipboard')
+}
+
 function setExecCommand(execCommand: ReturnType<typeof vi.fn>) {
   Object.defineProperty(document, 'execCommand', {
     configurable: true,
@@ -123,7 +127,18 @@ test('copy button reports success when Clipboard API resolves', async () => {
 
 test('copy button falls back to execCommand and restores the page state when Clipboard API rejects', async () => {
   setClipboard(vi.fn().mockRejectedValue(new Error('denied')))
-  const execCommand = vi.fn().mockReturnValue(true)
+  const execCommand = vi.fn().mockImplementation((command: string) => {
+    expect(command).toBe('copy')
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-copy-fallback]')
+    expect(textarea).not.toBeNull()
+    expect(document.body.contains(textarea)).toBe(true)
+    expect(textarea?.value).toBe('推荐说法')
+    expect(textarea?.readOnly).toBe(true)
+    expect(document.activeElement).toBe(textarea)
+    expect(textarea?.selectionStart).toBe(0)
+    expect(textarea?.selectionEnd).toBe('推荐说法'.length)
+    return true
+  })
   setExecCommand(execCommand)
 
   const focusedInput = document.createElement('input')
@@ -151,9 +166,38 @@ test('copy button falls back to execCommand and restores the page state when Cli
   expect(window.getSelection()?.toString()).toBe('保留选择')
 })
 
+test('copy button falls back successfully when navigator.clipboard is absent', async () => {
+  removeClipboard()
+  expect('clipboard' in navigator).toBe(false)
+  const execCommand = vi.fn().mockReturnValue(true)
+  setExecCommand(execCommand)
+  const view = render(CopyButton, { props: { text: '完整话术' } })
+
+  await fireEvent.click(view.getByRole('button', { name: '复制' }))
+
+  await waitFor(() => expect(view.getByText('已复制')).toBeInTheDocument())
+  expect(execCommand).toHaveBeenCalledWith('copy')
+  expect(document.querySelector('[data-copy-fallback]')).toBeNull()
+})
+
 test('copy button reports failure when Clipboard API and execCommand both fail', async () => {
   setClipboard(vi.fn().mockRejectedValue(new Error('denied')))
   const execCommand = vi.fn().mockReturnValue(false)
+  setExecCommand(execCommand)
+  const view = render(CopyButton, { props: { text: '推荐说法' } })
+
+  await fireEvent.click(view.getByRole('button', { name: '复制' }))
+
+  await waitFor(() => expect(view.getByText('复制失败，请重试')).toBeInTheDocument())
+  expect(execCommand).toHaveBeenCalledWith('copy')
+  expect(document.querySelector('[data-copy-fallback]')).toBeNull()
+})
+
+test('copy button cleans up and reports failure when execCommand throws', async () => {
+  setClipboard(vi.fn().mockRejectedValue(new Error('denied')))
+  const execCommand = vi.fn().mockImplementation(() => {
+    throw new Error('copy blocked')
+  })
   setExecCommand(execCommand)
   const view = render(CopyButton, { props: { text: '推荐说法' } })
 
