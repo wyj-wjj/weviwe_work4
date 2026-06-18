@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { askRag, type RagAnswerResponse } from '../../api/rag'
@@ -11,6 +11,8 @@ import { contentTypeLabel, formatDateTime, sourceDetailPath } from '../../utils/
 const route = useRoute()
 const answer = ref<RagAnswerResponse | null>(null)
 const state = ref<'loading' | 'ready' | 'empty' | 'ai-unavailable' | 'service'>('loading')
+let requestSequence = 0
+let activeController: AbortController | null = null
 
 const question = computed(() => {
   const queryQuestion = route.query.question
@@ -20,23 +22,40 @@ const question = computed(() => {
 watch(
   question,
   async (currentQuestion) => {
+    requestSequence += 1
+    const sequence = requestSequence
+    activeController?.abort()
+    activeController = null
     answer.value = null
-    if (!currentQuestion.trim()) {
+
+    const normalizedQuestion = currentQuestion.trim()
+    if (!normalizedQuestion) {
       state.value = 'empty'
       return
     }
 
+    const controller = new AbortController()
+    activeController = controller
     state.value = 'loading'
     try {
-      answer.value = await askRag(currentQuestion.trim())
+      const result = await askRag(normalizedQuestion, controller.signal)
+      if (sequence !== requestSequence || controller.signal.aborted) return
+      answer.value = result
       state.value = 'ready'
     } catch (error) {
+      if (sequence !== requestSequence || controller.signal.aborted) return
       const apiError = error as { code?: string; status?: number }
       state.value = apiError.code === 'ai_unavailable' || apiError.status === 503 ? 'ai-unavailable' : 'service'
     }
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => {
+  requestSequence += 1
+  activeController?.abort()
+  activeController = null
+})
 </script>
 
 <template>

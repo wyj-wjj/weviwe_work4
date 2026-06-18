@@ -23,6 +23,16 @@ const mockedAskRag = vi.mocked(askRag)
 const mockedGetQuiz = vi.mocked(getQuiz)
 const mockedSubmitQuiz = vi.mocked(submitQuiz)
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 const employeeUser: AuthUser = {
   id: 2,
   username: 'general',
@@ -224,4 +234,71 @@ test('AI answer page renders fixed miss copy and AI unavailable state', async ()
   await waitFor(() => {
     expect(unavailableView.getByText('智能问答暂不可用，请稍后重试')).toBeInTheDocument()
   })
+})
+
+test('AI page ignores an older success after a newer question succeeds', async () => {
+  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
+  await view.router.push('/app/ask?question=新问题')
+  newRequest.resolve({ hit: true, answer: '新回答', sources: [] })
+  await waitFor(() => expect(view.getByText('新回答')).toBeInTheDocument())
+
+  oldRequest.resolve({ hit: true, answer: '旧回答', sources: [] })
+  await oldRequest.promise
+  await Promise.resolve()
+
+  expect(view.queryByText('旧回答')).not.toBeInTheDocument()
+  expect(view.getByText('问题：新问题')).toBeInTheDocument()
+})
+
+test('AI page ignores an older error after a newer question succeeds', async () => {
+  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
+  await view.router.push('/app/ask?question=新问题')
+  newRequest.resolve({ hit: true, answer: '新回答', sources: [] })
+  await waitFor(() => expect(view.getByText('新回答')).toBeInTheDocument())
+
+  oldRequest.reject({ status: 503, code: 'ai_unavailable' })
+  await oldRequest.promise.catch(() => undefined)
+  await Promise.resolve()
+
+  expect(view.queryByText('智能问答暂不可用，请稍后重试')).not.toBeInTheDocument()
+  expect(view.getByText('新回答')).toBeInTheDocument()
+})
+
+test('AI page aborts the active request when it unmounts', async () => {
+  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValue(request.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=卸载问题')
+  await waitFor(() => expect(mockedAskRag).toHaveBeenCalled())
+  const signal = mockedAskRag.mock.calls[0]?.[1]
+
+  expect(signal).toBeInstanceOf(AbortSignal)
+  expect(signal?.aborted).toBe(false)
+
+  view.unmount()
+
+  expect(signal?.aborted).toBe(true)
+  request.reject({ name: 'AbortError' })
+  await Promise.resolve()
+})
+
+test('employee AI form does not route again for the same normalized question', async () => {
+  mockedAskRag.mockResolvedValue({ hit: true, answer: '当前回答', sources: [] })
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=同一个问题')
+  await waitFor(() => expect(view.getByText('当前回答')).toBeInTheDocument())
+  const push = vi.spyOn(view.router, 'push')
+
+  await fireEvent.update(view.getByLabelText('AI 问题'), '  同一个问题  ')
+  await fireEvent.click(view.getByRole('button', { name: '提问' }))
+
+  expect(push).not.toHaveBeenCalled()
 })

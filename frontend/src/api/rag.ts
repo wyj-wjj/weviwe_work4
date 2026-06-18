@@ -17,7 +17,14 @@ export interface RagAnswerResponse {
   usage?: Record<string, unknown>
 }
 
-export async function askRag(question: string): Promise<RagAnswerResponse> {
-  const response = await apiClient.post<RagAnswerResponse>('/app/rag/ask', { question })
+export async function askRag(
+  question: string,
+  signal?: AbortSignal,
+): Promise<RagAnswerResponse> {
+  const response = await apiClient.post<RagAnswerResponse>(
+    '/app/rag/ask',
+    { question },
+    { signal },
+  )
   return response.data
 }
