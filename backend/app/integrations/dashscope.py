@@ -1,3 +1,5 @@
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +22,11 @@ class ProviderAuthenticationError(RuntimeError):
 
 class ProviderResponseError(RuntimeError):
     pass
+
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_HTTP_ATTEMPTS = 3
+RETRY_BASE_DELAY_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -76,31 +83,30 @@ class FakeDashScopeClient:
 
 
 class DashScopeHttpClient:
-    def __init__(self, settings: Settings, *, http_client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        http_client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.settings = settings
         self.http_client = http_client
+        self.sleep = sleep
 
-    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _send(self, path: str, payload: dict[str, Any]) -> httpx.Response:
         url = f"{self.settings.dashscope_base_url.rstrip('/')}{path}"
         headers = {
             "Authorization": f"Bearer {self.settings.dashscope_api_key}",
             "Content-Type": "application/json",
         }
-        try:
-            if self.http_client is not None:
-                response = self.http_client.post(url, headers=headers, json=payload)
-            else:
-                with httpx.Client(timeout=60.0) as client:
-                    response = client.post(url, headers=headers, json=payload)
-        except httpx.TimeoutException as exc:
-            raise ProviderTimeoutError("DashScope request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderResponseError("DashScope request failed.") from exc
+        if self.http_client is not None:
+            return self.http_client.post(url, headers=headers, json=payload)
+        with httpx.Client(timeout=60.0) as client:
+            return client.post(url, headers=headers, json=payload)
 
-        if response.status_code in {401, 403}:
-            raise ProviderAuthenticationError("DashScope authentication failed.")
-        if response.status_code >= 400:
-            raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
+    @staticmethod
+    def _decode_response(response: httpx.Response) -> dict[str, Any]:
         try:
             data = response.json()
         except ValueError as exc:
@@ -108,6 +114,32 @@ class DashScopeHttpClient:
         if not isinstance(data, dict):
             raise ProviderResponseError("DashScope returned an invalid response object.")
         return data
+
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        for attempt in range(MAX_HTTP_ATTEMPTS):
+            try:
+                response = self._send(path, payload)
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                if attempt == MAX_HTTP_ATTEMPTS - 1:
+                    raise ProviderTimeoutError("DashScope request timed out or could not connect.") from exc
+                self.sleep(RETRY_BASE_DELAY_SECONDS * (2**attempt))
+                continue
+            except httpx.HTTPError as exc:
+                raise ProviderResponseError("DashScope request failed.") from exc
+
+            if response.status_code in {401, 403}:
+                raise ProviderAuthenticationError("DashScope authentication failed.")
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                if attempt == MAX_HTTP_ATTEMPTS - 1:
+                    raise ProviderResponseError(
+                        f"DashScope returned temporary HTTP {response.status_code}."
+                    )
+                self.sleep(RETRY_BASE_DELAY_SECONDS * (2**attempt))
+                continue
+            if response.status_code >= 400:
+                raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
+            return self._decode_response(response)
+        raise ProviderResponseError("DashScope retry loop exhausted.")
 
     def embed_text(self, text: str) -> EmbeddingResult:
         data = self._post_json(
@@ -151,6 +183,8 @@ class DashScopeHttpClient:
                         "content": (
                             "你是企业官方话术助手。只能依据提供的已授权来源回答，"
                             "不得补充来源中没有的业务结论，不得推测，不得泄露未提供的内容。"
+                            "先直接回答用户问题，并覆盖来源中与问题直接相关的关键数字、条件和限制。"
+                            "不要机械罗列与问题无关的来源内容。"
                             "如果来源不足以回答，应明确说明现有来源不足。"
                         ),
                     },

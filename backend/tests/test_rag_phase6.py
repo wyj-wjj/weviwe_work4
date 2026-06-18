@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import select
 
 from app.api.deps import get_dashscope_client, get_milvus_client
@@ -5,12 +6,13 @@ from app.domain.enums import ContentLevel, ContentType, MissedQuestionStatus
 from app.integrations.dashscope import FakeDashScopeClient, ProviderTimeoutError
 from app.integrations.milvus import FakeMilvusClient, MilvusSearchHit
 from app.main import app
+from app.models.content import ContentChunk
 from app.models.missed_question import MissedQuestion
 from app.models.user import User
 from app.schemas.content import ContentCreate
 from app.services.content_service import create_content, publish_content
-from app.services.rag_answer_service import MISSED_MESSAGE, answer_question
-from app.services.rag_index_service import sync_content_index
+from app.services.rag_answer_service import MISSED_MESSAGE, answer_question, load_authorized_contexts
+from app.services.rag_index_service import stable_content_hash, sync_content_index
 
 
 def make_user(db_session, *, username: str, account_type: str, content_level: str) -> User:
@@ -59,6 +61,15 @@ def publish_indexed_content(
     return content.id, content.current_version_id
 
 
+def current_chunk(db_session, *, content_id: int) -> ContentChunk:
+    return db_session.scalars(
+        select(ContentChunk)
+        .where(ContentChunk.content_id == content_id)
+        .where(ContentChunk.is_active.is_(True))
+        .order_by(ContentChunk.sort_order.asc(), ContentChunk.id.asc())
+    ).one()
+
+
 def test_rag_filters_mixed_milvus_candidates_and_uses_only_authorized_context(db_session) -> None:
     admin = make_user(db_session, username="rag-admin", account_type="admin", content_level="full")
     general_user = make_user(db_session, username="rag-general", account_type="general_user", content_level="general")
@@ -79,9 +90,29 @@ def test_rag_filters_mixed_milvus_candidates_and_uses_only_authorized_context(db
         permission_level=ContentLevel.FULL,
         milvus=milvus,
     )
+    general_chunk = current_chunk(db_session, content_id=general_content_id)
+    full_chunk = current_chunk(db_session, content_id=full_content_id)
     milvus.search_results = [
-        MilvusSearchHit(primary_key="full", score=0.97, metadata={"content_id": full_content_id, "chunk_id": 2, "permission_level": "full", "is_active": True}),
-        MilvusSearchHit(primary_key="general", score=0.95, metadata={"content_id": general_content_id, "chunk_id": 1, "permission_level": "general", "is_active": True}),
+        MilvusSearchHit(
+            primary_key="full",
+            score=0.97,
+            metadata={
+                "content_id": full_content_id,
+                "chunk_id": full_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        ),
+        MilvusSearchHit(
+            primary_key="general",
+            score=0.95,
+            metadata={
+                "content_id": general_content_id,
+                "chunk_id": general_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        ),
     ]
     dashscope = FakeDashScopeClient(chat_answer="Use the approved greeting.", embedding=[0.2, 0.2, 0.2])
 
@@ -97,9 +128,183 @@ def test_rag_filters_mixed_milvus_candidates_and_uses_only_authorized_context(db
     assert dashscope.embedding_requests == ["How should I greet a customer?"]
     assert milvus.search_requests[-1].allowed_permission_levels == {"general"}
     assert [source["content_id"] for source in result["sources"]] == [general_content_id]
+    assert len(dashscope.chat_requests[-1]["contexts"]) == 1
     context_text = dashscope.chat_requests[-1]["contexts"][0]["text"]
     assert "Greet customers" in context_text
     assert "Full permission pricing policy" not in context_text
+
+
+@pytest.mark.parametrize("question", ["电池能用多少次？", "这块电池能循环多少次？"])
+def test_short_cycle_life_question_expands_only_embedding_text(db_session, question: str) -> None:
+    admin = make_user(db_session, username="cycle-admin", account_type="admin", content_level="full")
+    full_user = make_user(db_session, username="cycle-user", account_type="full_user", content_level="full")
+    milvus = FakeMilvusClient()
+    content_id, _ = publish_indexed_content(
+        db_session,
+        admin,
+        title="电池循环寿命",
+        body="电池设计循环寿命为 6000-8000 次。",
+        permission_level=ContentLevel.FULL,
+        milvus=milvus,
+    )
+    chunk = current_chunk(db_session, content_id=content_id)
+    milvus.search_results = [
+        MilvusSearchHit(
+            primary_key="cycle",
+            score=0.92,
+            metadata={
+                "content_id": content_id,
+                "chunk_id": chunk.id,
+                "permission_level": "full",
+                "is_active": True,
+            },
+        )
+    ]
+    dashscope = FakeDashScopeClient(chat_answer="6000-8000 次", embedding=[1.0, 0.0, 0.0])
+
+    result = answer_question(
+        db_session,
+        user=full_user,
+        question=question,
+        dashscope_client=dashscope,
+        milvus_client=milvus,
+    )
+
+    assert result["hit"] is True
+    assert dashscope.embedding_requests == [f"{question} 电池循环寿命 充放电循环次数"]
+    assert dashscope.chat_requests[-1]["question"] == question
+
+
+def test_short_cycle_life_miss_records_original_question(db_session) -> None:
+    full_user = make_user(db_session, username="cycle-miss", account_type="full_user", content_level="full")
+    dashscope = FakeDashScopeClient(embedding=[1.0, 0.0, 0.0])
+
+    result = answer_question(
+        db_session,
+        user=full_user,
+        question="电池能用多少次？",
+        dashscope_client=dashscope,
+        milvus_client=FakeMilvusClient(search_results=[]),
+    )
+
+    missed = db_session.scalars(select(MissedQuestion)).one()
+    assert result["hit"] is False
+    assert dashscope.embedding_requests == ["电池能用多少次？ 电池循环寿命 充放电循环次数"]
+    assert missed.question == "电池能用多少次？"
+
+
+def test_authorized_contexts_sort_by_score_and_drop_weak_relative_matches(db_session) -> None:
+    admin = make_user(db_session, username="window-admin", account_type="admin", content_level="full")
+    user = make_user(db_session, username="window-user", account_type="general_user", content_level="general")
+    milvus = FakeMilvusClient()
+    content_ids = [
+        publish_indexed_content(
+            db_session,
+            admin,
+            title=title,
+            body=body,
+            permission_level=ContentLevel.GENERAL,
+            milvus=milvus,
+        )[0]
+        for title, body in [
+            ("Best match", "Best approved context."),
+            ("Second match", "Second approved context."),
+            ("Weak match", "Weak approved context."),
+        ]
+    ]
+    chunks = [current_chunk(db_session, content_id=content_id) for content_id in content_ids]
+    hits = [
+        MilvusSearchHit(
+            primary_key="second",
+            score=0.89,
+            metadata={"chunk_id": chunks[1].id},
+        ),
+        MilvusSearchHit(
+            primary_key="weak",
+            score=0.71,
+            metadata={"chunk_id": chunks[2].id},
+        ),
+        MilvusSearchHit(
+            primary_key="best",
+            score=0.91,
+            metadata={"chunk_id": chunks[0].id},
+        ),
+    ]
+
+    contexts = load_authorized_contexts(db_session, hits=hits, user=user, min_score=0.7)
+
+    assert [context["source"]["content_id"] for context in contexts] == content_ids[:2]
+    assert [context["source"]["relevance_score"] for context in contexts] == [0.91, 0.89]
+
+
+def test_rag_merges_same_content_chunks_into_one_context_and_source(db_session) -> None:
+    admin = make_user(db_session, username="merge-admin", account_type="admin", content_level="full")
+    user = make_user(db_session, username="merge-user", account_type="general_user", content_level="general")
+    milvus = FakeMilvusClient()
+    content_id, version_id = publish_indexed_content(
+        db_session,
+        admin,
+        title="Merged source",
+        body="First approved section.",
+        permission_level=ContentLevel.GENERAL,
+        milvus=milvus,
+    )
+    first_chunk = current_chunk(db_session, content_id=content_id)
+    second_text = "Second approved section."
+    second_chunk = ContentChunk(
+        content_id=content_id,
+        version_id=version_id,
+        chunk_type="base_script_body",
+        chunk_text=second_text,
+        sort_order=2,
+        token_estimate=4,
+        content_hash=stable_content_hash(second_text),
+        permission_level=ContentLevel.GENERAL.value,
+        is_active=True,
+    )
+    db_session.add(second_chunk)
+    db_session.commit()
+    db_session.refresh(second_chunk)
+    milvus.search_results = [
+        MilvusSearchHit(
+            primary_key="first",
+            score=0.91,
+            metadata={
+                "content_id": content_id,
+                "chunk_id": first_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        ),
+        MilvusSearchHit(
+            primary_key="second",
+            score=0.89,
+            metadata={
+                "content_id": content_id,
+                "chunk_id": second_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        ),
+    ]
+    dashscope = FakeDashScopeClient(chat_answer="Merged answer", embedding=[0.2, 0.2, 0.2])
+
+    result = answer_question(
+        db_session,
+        user=user,
+        question="What is the approved source?",
+        dashscope_client=dashscope,
+        milvus_client=milvus,
+    )
+
+    assert result["hit"] is True
+    assert len(result["sources"]) == 1
+    assert len(dashscope.chat_requests[-1]["contexts"]) == 1
+    assert result["sources"][0] == dashscope.chat_requests[-1]["contexts"][0]["source"]
+    merged_text = dashscope.chat_requests[-1]["contexts"][0]["text"]
+    assert "First approved section." in merged_text
+    assert "Second approved section." in merged_text
+    assert result["sources"][0]["chunk_id"] == first_chunk.id
 
 
 def test_rag_low_score_records_missed_question(db_session) -> None:
@@ -155,9 +360,29 @@ def test_rag_api_covers_success_unauthorized_permission_filter_and_provider_erro
         permission_level=ContentLevel.FULL,
         milvus=milvus,
     )
+    general_chunk = current_chunk(db_session, content_id=general_content_id)
+    full_chunk = current_chunk(db_session, content_id=full_content_id)
     milvus.search_results = [
-        MilvusSearchHit(primary_key="full", score=0.98, metadata={"content_id": full_content_id, "chunk_id": 2, "permission_level": "full", "is_active": True}),
-        MilvusSearchHit(primary_key="general", score=0.96, metadata={"content_id": general_content_id, "chunk_id": 1, "permission_level": "general", "is_active": True}),
+        MilvusSearchHit(
+            primary_key="full",
+            score=0.98,
+            metadata={
+                "content_id": full_content_id,
+                "chunk_id": full_chunk.id,
+                "permission_level": "full",
+                "is_active": True,
+            },
+        ),
+        MilvusSearchHit(
+            primary_key="general",
+            score=0.96,
+            metadata={
+                "content_id": general_content_id,
+                "chunk_id": general_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        ),
     ]
     dashscope = FakeDashScopeClient(chat_answer="API answer", embedding=[0.3, 0.3, 0.3])
     app.dependency_overrides[get_dashscope_client] = lambda: dashscope

@@ -33,8 +33,31 @@ def stable_content_hash(text: str) -> str:
     return sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def text_field(label: str, value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        rendered = "\n".join(str(item).strip() for item in value if str(item).strip())
+    else:
+        rendered = str(value).strip()
+    return f"{label}：{rendered}" if rendered else None
+
+
+def common_chunk_fields(content: Content, version: ContentVersion) -> list[str]:
+    return [
+        field
+        for field in [
+            text_field("标题", version.title),
+            text_field("分类", content.category),
+            text_field("摘要", version.summary),
+        ]
+        if field
+    ]
+
+
 def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSpec]:
     payload: dict[str, Any] = version.structured_payload or {}
+    common_fields = common_chunk_fields(content, version)
     if content.content_type == ContentType.STANDARD_SCRIPT.value:
         items = payload.get("items")
         if isinstance(items, list) and items:
@@ -42,39 +65,81 @@ def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSp
             for index, item in enumerate(items, start=1):
                 if not isinstance(item, dict):
                     continue
-                text = "\n".join(
-                    part
-                    for part in [
-                        item.get("scene"),
-                        item.get("recommended_speech"),
-                        item.get("forbidden_speech"),
-                        item.get("notes"),
+                item_fields = [
+                    field
+                    for field in [
+                        text_field("场景", item.get("scene")),
+                        text_field("推荐说法", item.get("recommended_speech")),
+                        text_field("禁用说法", item.get("forbidden_speech")),
+                        text_field("注意事项", item.get("notes")),
                     ]
-                    if part
-                )
-                if text:
-                    specs.append(ChunkSpec(chunk_type="standard_script_scene", text=text, sort_order=index))
-            return specs or [ChunkSpec(chunk_type="standard_script_scene", text=version.body, sort_order=1)]
-        text = "\n".join(
-            part
-            for part in [
-                payload.get("scene"),
-                payload.get("recommended_speech"),
-                payload.get("forbidden_speech"),
-                payload.get("notes"),
+                    if field
+                ]
+                if item_fields:
+                    specs.append(
+                        ChunkSpec(
+                            chunk_type="standard_script_scene",
+                            text="\n".join([*common_fields, *item_fields]),
+                            sort_order=index,
+                        )
+                    )
+            if specs:
+                return specs
+        item_fields = [
+            field
+            for field in [
+                text_field("场景", payload.get("scene")),
+                text_field("推荐说法", payload.get("recommended_speech")),
+                text_field("禁用说法", payload.get("forbidden_speech")),
+                text_field("注意事项", payload.get("notes")),
             ]
-            if part
-        )
-        return [ChunkSpec(chunk_type="standard_script_scene", text=text or version.body, sort_order=1)]
+            if field
+        ]
+        if not item_fields:
+            fallback_body = text_field("正文", version.body)
+            item_fields = [fallback_body] if fallback_body else []
+        return [
+            ChunkSpec(
+                chunk_type="standard_script_scene",
+                text="\n".join([*common_fields, *item_fields]),
+                sort_order=1,
+            )
+        ]
 
     if content.content_type == ContentType.MUST_READ.value:
         update_body = payload.get("update_body") or version.body
         points = payload.get("adjustment_points") or []
-        point_text = "\n".join(str(point) for point in points)
-        text = "\n".join(part for part in [update_body, point_text] if part)
-        return [ChunkSpec(chunk_type="must_read_update", text=text, sort_order=1)]
+        must_read_fields = [
+            field
+            for field in [
+                text_field("更新正文", update_body),
+                text_field("调整要点", points),
+            ]
+            if field
+        ]
+        return [
+            ChunkSpec(
+                chunk_type="must_read_update",
+                text="\n".join([*common_fields, *must_read_fields]),
+                sort_order=1,
+            )
+        ]
 
-    return [ChunkSpec(chunk_type="base_script_body", text=version.body, sort_order=1)]
+    base_fields = [
+        field
+        for field in [
+            text_field("正文", version.body),
+            text_field("要点", payload.get("points")),
+        ]
+        if field
+    ]
+    return [
+        ChunkSpec(
+            chunk_type="base_script_body",
+            text="\n".join([*common_fields, *base_fields]),
+            sort_order=1,
+        )
+    ]
 
 
 def replace_chunks_for_version(db: Session, *, content: Content, version: ContentVersion) -> list[ContentChunk]:

@@ -15,6 +15,7 @@ def create_content_payload(
     content_type: ContentType,
     title: str,
     permission_level: ContentLevel = ContentLevel.GENERAL,
+    summary: str | None = None,
     body: str = "Approved body.",
     structured_payload: dict | None = None,
 ) -> ContentCreate:
@@ -23,6 +24,7 @@ def create_content_payload(
         title=title,
         category="sales",
         permission_level=permission_level,
+        summary=summary,
         body=body,
         structured_payload=structured_payload,
     )
@@ -54,7 +56,13 @@ def test_chunk_generation_rules_keep_metadata_and_business_boundaries(db_session
     base = create_and_publish(
         db_session,
         creator,
-        create_content_payload(content_type=ContentType.BASE_SCRIPT, title="Base", body="Base approved text."),
+        create_content_payload(
+            content_type=ContentType.BASE_SCRIPT,
+            title="Base",
+            summary="Return calculation",
+            body="Base approved text.",
+            structured_payload={"points": ["IRR 12-15%", "回收期 3-5 年"]},
+        ),
     )
     standard = create_and_publish(
         db_session,
@@ -62,6 +70,7 @@ def test_chunk_generation_rules_keep_metadata_and_business_boundaries(db_session
         create_content_payload(
             content_type=ContentType.STANDARD_SCRIPT,
             title="Scenario",
+            summary="Price objection response",
             body="Fallback scenario body.",
             structured_payload={
                 "scene": "Price objection",
@@ -77,6 +86,7 @@ def test_chunk_generation_rules_keep_metadata_and_business_boundaries(db_session
         create_content_payload(
             content_type=ContentType.MUST_READ,
             title="Weekly Update",
+            summary="Weekly policy changes",
             body="Read the weekly update.",
             structured_payload={
                 "update_body": "Use the new greeting this week.",
@@ -93,10 +103,33 @@ def test_chunk_generation_rules_keep_metadata_and_business_boundaries(db_session
         assert chunk.permission_level == content.permission_level
         assert chunk.is_active is True
 
+    base_chunk = next(item for item in chunks if item.content_id == base.id)
+    assert base_chunk.chunk_type == "base_script_body"
+    assert "标题：Base" in base_chunk.chunk_text
+    assert "分类：sales" in base_chunk.chunk_text
+    assert "摘要：Return calculation" in base_chunk.chunk_text
+    assert "正文：Base approved text." in base_chunk.chunk_text
+    assert "要点：IRR 12-15%" in base_chunk.chunk_text
+    assert "回收期 3-5 年" in base_chunk.chunk_text
+
     standard_chunk = next(item for item in chunks if item.content_id == standard.id)
     assert standard_chunk.chunk_type == "standard_script_scene"
-    assert "Price objection" in standard_chunk.chunk_text
-    assert "Confirm value before discussing price." in standard_chunk.chunk_text
+    assert "标题：Scenario" in standard_chunk.chunk_text
+    assert "分类：sales" in standard_chunk.chunk_text
+    assert "摘要：Price objection response" in standard_chunk.chunk_text
+    assert "场景：Price objection" in standard_chunk.chunk_text
+    assert "推荐说法：Confirm value before discussing price." in standard_chunk.chunk_text
+    assert "禁用说法：Do not promise unavailable discounts." in standard_chunk.chunk_text
+    assert "注意事项：Keep the tone calm." in standard_chunk.chunk_text
+
+    must_read_chunk = next(item for item in chunks if item.content_id == must_read.id)
+    assert must_read_chunk.chunk_type == "must_read_update"
+    assert "标题：Weekly Update" in must_read_chunk.chunk_text
+    assert "分类：sales" in must_read_chunk.chunk_text
+    assert "摘要：Weekly policy changes" in must_read_chunk.chunk_text
+    assert "更新正文：Use the new greeting this week." in must_read_chunk.chunk_text
+    assert "调整要点：Confirm identity" in must_read_chunk.chunk_text
+    assert "Ask for customer needs" in must_read_chunk.chunk_text
 
 
 def test_chunk_hash_is_stable_for_same_text_and_changes_when_text_changes() -> None:
@@ -109,7 +142,12 @@ def test_index_sync_success_creates_active_vector_records(db_session) -> None:
     content = create_and_publish(
         db_session,
         creator,
-        create_content_payload(content_type=ContentType.BASE_SCRIPT, title="Index Me", body="Indexable text."),
+        create_content_payload(
+            content_type=ContentType.BASE_SCRIPT,
+            title="Index Me",
+            summary="Index summary.",
+            body="Indexable text.",
+        ),
     )
     dashscope = FakeDashScopeClient(embedding=[0.1, 0.2, 0.3], embedding_model="fake-embedding")
     milvus = FakeMilvusClient()
@@ -124,7 +162,9 @@ def test_index_sync_success_creates_active_vector_records(db_session) -> None:
     assert record.embedding_model == "fake-embedding"
     assert record.embedding_dimension == 3
     assert record.is_active is True
-    assert dashscope.embedding_requests == ["Indexable text."]
+    assert dashscope.embedding_requests == [
+        "标题：Index Me\n分类：sales\n摘要：Index summary.\n正文：Indexable text."
+    ]
 
 
 def test_index_sync_failure_keeps_published_content_visible(client, db_session, general_user_headers) -> None:

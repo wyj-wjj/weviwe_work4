@@ -80,6 +80,9 @@ def test_dashscope_http_client_calls_openai_compatible_embedding_and_chat() -> N
     assert chat_request["payload"]["model"] == "qwen-plus"
     assert chat_request["payload"]["stream"] is False
     assert "只能依据提供的已授权来源" in chat_request["payload"]["messages"][0]["content"]
+    assert "先直接回答用户问题" in chat_request["payload"]["messages"][0]["content"]
+    assert "关键数字、条件和限制" in chat_request["payload"]["messages"][0]["content"]
+    assert "不要机械罗列与问题无关的来源内容" in chat_request["payload"]["messages"][0]["content"]
     assert "开场话术" in chat_request["payload"]["messages"][1]["content"]
     assert "您好，请先说明您的核心需求。" in chat_request["payload"]["messages"][1]["content"]
 
@@ -105,13 +108,162 @@ def test_dashscope_http_client_standardizes_http_and_payload_errors(
         dashscope_base_url="https://dashscope.example/compatible-mode/v1",
     )
     with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        client = DashScopeHttpClient(settings, http_client=http_client)
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=lambda _delay: None)
         with pytest.raises(expected_error):
             client.embed_text("test")
 
 
-def test_dashscope_http_client_standardizes_timeouts() -> None:
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_dashscope_retries_temporary_http_status_and_then_succeeds(status_code: int) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(status_code, json={"error": {"message": "temporary"}})
+        return httpx.Response(
+            200,
+            json={"model": "text-embedding-v4", "data": [{"embedding": [0.1, 0.2]}]},
+        )
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
+        result = client.embed_text("test")
+
+    assert result.vector == [0.1, 0.2]
+    assert attempts == 2
+    assert delays == [0.2]
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadTimeout, httpx.ConnectError])
+def test_dashscope_retries_transient_transport_errors_and_then_succeeds(
+    error_type: type[httpx.HTTPError],
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise error_type("temporary", request=request)
+        return httpx.Response(
+            200,
+            json={"model": "text-embedding-v4", "data": [{"embedding": [0.1, 0.2]}]},
+        )
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
+        result = client.embed_text("test")
+
+    assert result.vector == [0.1, 0.2]
+    assert attempts == 3
+    assert delays == [0.2, 0.4]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (400, ProviderResponseError),
+        (401, ProviderAuthenticationError),
+        (403, ProviderAuthenticationError),
+        (404, ProviderResponseError),
+        (422, ProviderResponseError),
+        (501, ProviderResponseError),
+    ],
+)
+def test_dashscope_does_not_retry_permanent_http_statuses(
+    status_code: int,
+    expected_error: type[Exception],
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status_code, json={"error": {"message": "permanent"}})
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
+        with pytest.raises(expected_error) as exc_info:
+            client.embed_text("test")
+
+    assert attempts == 1
+    assert delays == []
+    assert "test-only-api-key" not in str(exc_info.value)
+
+
+def test_dashscope_does_not_retry_invalid_json() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, content=b"{", headers={"Content-Type": "application/json"})
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
+        with pytest.raises(ProviderResponseError, match="invalid JSON"):
+            client.embed_text("test")
+
+    assert attempts == 1
+    assert delays == []
+
+
+def test_dashscope_stops_after_three_temporary_http_failures() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, json={"error": {"message": "temporary"}})
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
+        with pytest.raises(ProviderResponseError, match="temporary HTTP 503"):
+            client.embed_text("test")
+
+    assert attempts == 3
+    assert delays == [0.2, 0.4]
+
+
+def test_dashscope_http_client_standardizes_timeouts_after_three_attempts() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
         raise httpx.ReadTimeout("slow", request=request)
 
     settings = Settings(
@@ -120,6 +272,9 @@ def test_dashscope_http_client_standardizes_timeouts() -> None:
         dashscope_base_url="https://dashscope.example/compatible-mode/v1",
     )
     with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        client = DashScopeHttpClient(settings, http_client=http_client)
+        client = DashScopeHttpClient(settings, http_client=http_client, sleep=delays.append)
         with pytest.raises(ProviderTimeoutError):
             client.embed_text("test")
+
+    assert attempts == 3
+    assert delays == [0.2, 0.4]
