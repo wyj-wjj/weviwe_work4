@@ -11,6 +11,7 @@ from app.models.user import User
 from app.schemas.quiz import QuizQuestionCreate, QuizQuestionUpdate, QuizSubmitRequest
 from app.services.quiz_service import (
     create_quiz_question,
+    get_employee_quiz_questions_by_ids,
     list_employee_quiz_questions,
     list_quiz_questions,
     quiz_to_dict,
@@ -96,8 +97,11 @@ def app_submit_quiz(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    allowed = list_employee_quiz_questions(db, current_user)
-    allowed_by_id = {question.id: question for question in allowed}
+    allowed_by_id = get_employee_quiz_questions_by_ids(
+        db,
+        current_user,
+        [answer.question_id for answer in payload.answers],
+    )
     results = []
     for answer in payload.answers:
         question = allowed_by_id.get(answer.question_id)

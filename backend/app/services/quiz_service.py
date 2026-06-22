@@ -1,10 +1,10 @@
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.errors import AppError
-from app.domain.enums import ContentStatus, QuestionStatus
+from app.domain.enums import ContentLevel, ContentStatus, QuestionStatus
 from app.models.content import Content
 from app.models.quiz import QuizQuestion
 from app.models.user import User
@@ -92,19 +92,74 @@ def list_quiz_questions(db: Session, *, page: int = 1, page_size: int = 20) -> t
     return list(items), total
 
 
-def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
+def _load_employee_quiz_questions(
+    db: Session,
+    *,
+    permission_level: ContentLevel,
+    limit: int,
+    offset: int = 0,
+) -> list[QuizQuestion]:
     stmt = (
         select(QuizQuestion)
+        .options(joinedload(QuizQuestion.related_content))
+        .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
+        .where(QuizQuestion.permission_level == permission_level.value)
+        .order_by(QuizQuestion.id.asc())
+        .limit(limit)
+    )
+    if offset:
+        stmt = stmt.offset(offset)
+    return list(db.scalars(stmt).all())
+
+
+def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
+    if user.account_type not in {"admin", "full_user"}:
+        return _load_employee_quiz_questions(
+            db,
+            permission_level=ContentLevel.GENERAL,
+            limit=10,
+        )
+
+    reserved_full = _load_employee_quiz_questions(
+        db,
+        permission_level=ContentLevel.FULL,
+        limit=1,
+    )
+    general_items = _load_employee_quiz_questions(
+        db,
+        permission_level=ContentLevel.GENERAL,
+        limit=9 if reserved_full else 10,
+    )
+    selected = reserved_full + general_items
+    if reserved_full and len(selected) < 10:
+        selected.extend(
+            _load_employee_quiz_questions(
+                db,
+                permission_level=ContentLevel.FULL,
+                limit=10 - len(selected),
+                offset=1,
+            )
+        )
+    return selected
+
+
+def get_employee_quiz_questions_by_ids(
+    db: Session,
+    user: User,
+    question_ids: list[int],
+) -> dict[int, QuizQuestion]:
+    requested_ids = set(question_ids)
+    if not requested_ids:
+        return {}
+
+    stmt = (
+        select(QuizQuestion)
+        .options(joinedload(QuizQuestion.related_content))
+        .where(QuizQuestion.id.in_(requested_ids))
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.permission_level.in_(visible_levels_for(user)))
-        .order_by(QuizQuestion.id.asc())
     )
-    items = list(db.scalars(stmt).all())
-    if user.account_type not in {"admin", "full_user"}:
-        return items[:10]
-
-    full_items = [item for item in items if item.permission_level == "full"]
-    general_items = [item for item in items if item.permission_level == "general"]
-    selected = full_items[:1] + general_items
-    selected.extend(full_items[1:])
-    return selected[:10]
+    questions = list(db.scalars(stmt).all())
+    if len(questions) != len(requested_ids):
+        raise AppError(code="not_found", message="Question not found.", status_code=404)
+    return {question.id: question for question in questions}

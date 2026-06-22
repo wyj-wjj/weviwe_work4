@@ -1,4 +1,4 @@
-from sqlalchemy import inspect
+from sqlalchemy import event, inspect
 
 from app.models.quiz import QuizQuestion
 from test_admin_content_phase4 import base_payload, must_read_payload, standard_payload
@@ -98,6 +98,105 @@ def test_employee_quiz_returns_five_to_ten_visible_enabled_questions(
 
     repeated = client.get("/api/app/quiz", headers=full_user_headers)
     assert [item["id"] for item in repeated.json()["items"]] == [item["id"] for item in full_items]
+
+
+def test_general_quiz_query_limits_rows_in_sql(
+    client,
+    admin_headers,
+    general_user_headers,
+    db_session,
+):
+    create_quiz_questions(client, admin_headers, 20, permission_level="general")
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", record_statement)
+    try:
+        response = client.get("/api/app/quiz", headers=general_user_headers)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    quiz_selects = [
+        " ".join(statement.split())
+        for statement in statements
+        if "FROM quiz_questions" in statement
+    ]
+    assert len(quiz_selects) == 1
+    assert "LIMIT" in quiz_selects[0].upper()
+
+
+def test_full_quiz_uses_full_questions_when_no_general_questions_exist(
+    client,
+    admin_headers,
+    full_user_headers,
+):
+    full_ids = create_quiz_questions(client, admin_headers, 12, permission_level="full")
+
+    response = client.get("/api/app/quiz", headers=full_user_headers)
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == full_ids[:10]
+
+
+def test_full_quiz_returns_all_available_questions_when_total_is_below_ten(
+    client,
+    admin_headers,
+    full_user_headers,
+):
+    general_ids = create_quiz_questions(client, admin_headers, 2, permission_level="general")
+    full_ids = create_quiz_questions(client, admin_headers, 3, permission_level="full")
+
+    response = client.get("/api/app/quiz", headers=full_user_headers)
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [
+        full_ids[0],
+        *general_ids,
+        *full_ids[1:],
+    ]
+
+
+def test_employee_quiz_preloads_distinct_related_contents_with_bounded_queries(
+    client,
+    admin_headers,
+    general_user_headers,
+    db_session,
+):
+    for index in range(10):
+        content_id = create_published_content(
+            client,
+            admin_headers,
+            base_payload(title=f"关联话术 {index}", permission_level="general"),
+        )
+        created = client.post(
+            "/api/admin/quiz-questions",
+            json=quiz_payload(index, related_content_id=content_id),
+            headers=admin_headers,
+        )
+        assert created.status_code == 201
+
+    db_session.expunge_all()
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", record_statement)
+    try:
+        response = client.get("/api/app/quiz", headers=general_user_headers)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    content_selects = [
+        " ".join(statement.split())
+        for statement in statements
+        if "FROM contents" in statement
+    ]
+    assert len(content_selects) <= 1
 
 
 def test_employee_quiz_projects_only_visible_published_related_content(
@@ -208,6 +307,53 @@ def test_quiz_submit_returns_explanations_without_persisting_attempts(client, ad
     assert "quiz_scores" not in table_names
 
 
+def test_quiz_submit_accepts_an_enabled_visible_question_after_the_sampling_window_changes(
+    client,
+    admin_headers,
+    full_user_headers,
+    db_session,
+):
+    create_quiz_questions(client, admin_headers, 9, permission_level="general")
+    originally_loaded = QuizQuestion(
+        id=100,
+        **quiz_payload(100, permission_level="full"),
+    )
+    db_session.add(originally_loaded)
+    db_session.commit()
+
+    loaded = client.get("/api/app/quiz", headers=full_user_headers)
+    assert loaded.status_code == 200
+    assert originally_loaded.id in {item["id"] for item in loaded.json()["items"]}
+
+    earlier_reserved = QuizQuestion(
+        id=50,
+        **quiz_payload(50, permission_level="full"),
+    )
+    db_session.add(earlier_reserved)
+    db_session.commit()
+
+    reloaded = client.get("/api/app/quiz", headers=full_user_headers)
+    assert reloaded.status_code == 200
+    assert earlier_reserved.id in {item["id"] for item in reloaded.json()["items"]}
+    assert originally_loaded.id not in {item["id"] for item in reloaded.json()["items"]}
+
+    submitted = client.post(
+        "/api/app/quiz/submit",
+        json={
+            "answers": [
+                {
+                    "question_id": originally_loaded.id,
+                    "selected_answer": "确认需求",
+                }
+            ]
+        },
+        headers=full_user_headers,
+    )
+
+    assert submitted.status_code == 200
+    assert submitted.json()["results"][0]["question_id"] == originally_loaded.id
+
+
 def test_quiz_submit_rejects_questions_outside_current_user_permission(client, admin_headers, general_user_headers):
     question_ids = create_quiz_questions(client, admin_headers, 5, permission_level="full")
 
@@ -218,3 +364,24 @@ def test_quiz_submit_rejects_questions_outside_current_user_permission(client, a
     )
 
     assert response.status_code == 404
+
+
+def test_quiz_submit_rejects_missing_and_disabled_questions(
+    client,
+    admin_headers,
+    general_user_headers,
+):
+    disabled = client.post(
+        "/api/admin/quiz-questions",
+        json=quiz_payload(1, status="disabled"),
+        headers=admin_headers,
+    )
+    assert disabled.status_code == 201
+
+    for question_id in (disabled.json()["id"], 999_999):
+        response = client.post(
+            "/api/app/quiz/submit",
+            json={"answers": [{"question_id": question_id, "selected_answer": "确认需求"}]},
+            headers=general_user_headers,
+        )
+        assert response.status_code == 404
