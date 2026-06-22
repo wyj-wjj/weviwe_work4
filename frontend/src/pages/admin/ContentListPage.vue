@@ -19,6 +19,8 @@ const page = ref(1)
 const pageSize = 20
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const message = ref('')
+type PendingAction = 'publish' | 'offline' | 'retry'
+const pendingActions = reactive<Record<number, PendingAction | undefined>>({})
 const filters = reactive({
   content_type: '',
   status: '',
@@ -84,6 +86,10 @@ function canOffline(item: AdminContent) {
   return item.status === 'published'
 }
 
+function isPending(item: AdminContent) {
+  return Boolean(pendingActions[item.id])
+}
+
 function publishConfirmation(item: AdminContent) {
   const audience = item.permission_level === 'full' ? '管理员和完整权限员工' : '全部员工'
   const replaceText = item.current_version_id ? '本次发布会替换当前版本。' : '本次将生成首个正式版本。'
@@ -97,10 +103,14 @@ function publishConfirmation(item: AdminContent) {
 }
 
 async function publish(item: AdminContent) {
+  if (isPending(item)) {
+    return
+  }
   if (!window.confirm(publishConfirmation(item))) {
     return
   }
   message.value = ''
+  pendingActions[item.id] = 'publish'
   try {
     const result = await publishAdminContent(item.id)
     message.value =
@@ -110,29 +120,43 @@ async function publish(item: AdminContent) {
     await loadContents()
   } catch {
     message.value = '发布失败，请稍后重试'
+  } finally {
+    delete pendingActions[item.id]
   }
 }
 
 async function offline(item: AdminContent) {
+  if (isPending(item)) {
+    return
+  }
   if (!window.confirm(`确认下线“${item.title}”吗？下线后员工端和 AI 检索将不可见。`)) {
     return
   }
+  pendingActions[item.id] = 'offline'
   try {
     await offlineAdminContent(item.id)
     message.value = '内容已下线'
     await loadContents()
   } catch {
     message.value = '下线失败，请稍后重试'
+  } finally {
+    delete pendingActions[item.id]
   }
 }
 
 async function retryIndex(item: AdminContent) {
+  if (isPending(item)) {
+    return
+  }
+  pendingActions[item.id] = 'retry'
   try {
     const result = await retryAdminContentIndex(item.id)
     message.value = result.index_status === 'synced' ? '索引同步成功' : '索引同步仍未完成'
     await loadContents()
   } catch {
     message.value = '索引重试失败，请稍后重试'
+  } finally {
+    delete pendingActions[item.id]
   }
 }
 
@@ -225,11 +249,21 @@ onMounted(loadContents)
                   >
                     编辑
                   </RouterLink>
-                  <button v-if="canPublish(item)" type="button" @click="publish(item)">
-                    发布
+                  <button
+                    v-if="canPublish(item)"
+                    type="button"
+                    :disabled="isPending(item)"
+                    @click="publish(item)"
+                  >
+                    {{ pendingActions[item.id] === 'publish' ? '发布中' : '发布' }}
                   </button>
-                  <button v-if="canOffline(item)" type="button" @click="offline(item)">
-                    下线
+                  <button
+                    v-if="canOffline(item)"
+                    type="button"
+                    :disabled="isPending(item)"
+                    @click="offline(item)"
+                  >
+                    {{ pendingActions[item.id] === 'offline' ? '下线中' : '下线' }}
                   </button>
                   <RouterLink
                     v-if="item.current_version_id"
@@ -241,9 +275,10 @@ onMounted(loadContents)
                   <button
                     v-if="item.index_status === 'failed'"
                     type="button"
+                    :disabled="isPending(item)"
                     @click="retryIndex(item)"
                   >
-                    重试索引
+                    {{ pendingActions[item.id] === 'retry' ? '重试中' : '重试索引' }}
                   </button>
                 </div>
               </td>

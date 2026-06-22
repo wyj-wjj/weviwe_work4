@@ -63,18 +63,27 @@ def update_content(db: Session, *, content_id: int, payload: Any) -> Content:
     if content.status == ContentStatus.OFFLINE.value:
         raise AppError(code="content_offline", message="已下线内容不可编辑。", status_code=409)
     updates = payload.model_dump(exclude_unset=True)
-    if "title" in updates:
-        content.title = updates["title"]
+    stored_updates: dict[str, Any] = {}
+    if "title" in updates and updates["title"] is not None:
+        stored_updates["title"] = updates["title"]
     if "category" in updates:
-        content.category = updates["category"]
+        stored_updates["category"] = updates["category"]
     if "permission_level" in updates and updates["permission_level"] is not None:
-        content.permission_level = updates["permission_level"].value
+        stored_updates["permission_level"] = updates["permission_level"].value
     if "summary" in updates:
-        content.draft_summary = updates["summary"]
+        stored_updates["draft_summary"] = updates["summary"]
     if "body" in updates and updates["body"] is not None:
-        content.draft_body = updates["body"]
+        stored_updates["draft_body"] = updates["body"]
     if "structured_payload" in updates:
-        content.draft_payload = updates["structured_payload"]
+        stored_updates["draft_payload"] = updates["structured_payload"]
+
+    changed = False
+    for field, value in stored_updates.items():
+        if getattr(content, field) != value:
+            setattr(content, field, value)
+            changed = True
+    if changed:
+        content.draft_revision += 1
     db.commit()
     db.refresh(content)
     return content
@@ -112,9 +121,26 @@ def next_version_no(content: Content) -> int:
 
 
 def publish_content(db: Session, *, content_id: int) -> ContentVersion:
-    content = get_content_or_404(db, content_id)
+    content = db.scalar(
+        select(Content)
+        .where(Content.id == content_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if content is None:
+        raise not_found("内容不存在。")
     if content.status == ContentStatus.OFFLINE.value:
         raise AppError(code="content_offline", message="已下线内容不可发布。", status_code=409)
+    if (
+        content.current_version_id is not None
+        and content.published_draft_revision == content.draft_revision
+    ):
+        current_version = db.get(ContentVersion, content.current_version_id)
+        if current_version is None:
+            raise not_found("当前版本不存在。")
+        db.commit()
+        return current_version
+
     now = datetime.now(UTC)
     for chunk in content.chunks:
         chunk.is_active = False
@@ -128,6 +154,7 @@ def publish_content(db: Session, *, content_id: int) -> ContentVersion:
         summary=content.draft_summary,
         body=content.draft_body,
         structured_payload=content.draft_payload,
+        permission_level=content.permission_level,
         published_at=now,
         effective_at=now,
         created_by=content.created_by,
@@ -137,6 +164,7 @@ def publish_content(db: Session, *, content_id: int) -> ContentVersion:
     content.status = ContentStatus.PUBLISHED.value
     content.index_status = IndexStatus.NOT_SYNCED.value
     content.current_version = version
+    content.published_draft_revision = content.draft_revision
 
     from app.services.rag_index_service import replace_chunks_for_version
 

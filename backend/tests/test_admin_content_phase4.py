@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
 from app.domain.enums import ContentStatus
-from app.models.content import Content, ContentVersion
+from app.models.content import Content, ContentChunk, ContentVersion
 from app.services.content_service import list_ai_searchable_chunks, publish_content
 
 
@@ -100,6 +100,135 @@ def test_admin_content_list_filters_paginates_and_editing_draft_does_not_create_
     assert edited.status_code == 200
     assert edited.json()["title"] == "A edited"
     assert db_session.scalars(select(ContentVersion)).all() == []
+
+
+def test_draft_revision_changes_only_when_stored_draft_fields_change(
+    client,
+    admin_headers,
+    db_session,
+):
+    created = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers).json()
+    content = db_session.get(Content, created["id"])
+    assert content.draft_revision == 1
+
+    unchanged = client.patch(
+        f"/api/admin/contents/{content.id}",
+        json={"title": content.title, "body": content.draft_body},
+        headers=admin_headers,
+    )
+    assert unchanged.status_code == 200
+    db_session.refresh(content)
+    assert content.draft_revision == 1
+    assert db_session.scalars(select(ContentVersion)).all() == []
+
+    changed = client.patch(
+        f"/api/admin/contents/{content.id}",
+        json={"title": "已修改草稿", "body": "已修改正文"},
+        headers=admin_headers,
+    )
+    assert changed.status_code == 200
+    db_session.refresh(content)
+    assert content.draft_revision == 2
+    assert db_session.scalars(select(ContentVersion)).all() == []
+
+
+def test_repeating_publish_without_draft_change_is_idempotent(
+    client,
+    admin_headers,
+    db_session,
+):
+    content_id = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers).json()["id"]
+
+    first = client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+    second = client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["current_version_id"] == second.json()["current_version_id"]
+    versions = list(
+        db_session.scalars(
+            select(ContentVersion)
+            .where(ContentVersion.content_id == content_id)
+            .order_by(ContentVersion.version_no)
+        ).all()
+    )
+    chunks = list(
+        db_session.scalars(
+            select(ContentChunk)
+            .where(ContentChunk.content_id == content_id)
+            .order_by(ContentChunk.id)
+        ).all()
+    )
+    content = db_session.get(Content, content_id)
+    assert len(versions) == 1
+    assert len(chunks) == 1
+    assert chunks[0].is_active is True
+    assert content.published_draft_revision == content.draft_revision == 1
+
+
+def test_idempotent_service_publish_releases_the_locked_transaction(
+    client,
+    admin_headers,
+    db_session,
+):
+    content_id = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers).json()["id"]
+    first = publish_content(db_session, content_id=content_id)
+
+    second = publish_content(db_session, content_id=content_id)
+
+    assert db_session.in_transaction() is False
+    assert second.id == first.id
+
+
+def test_republish_creates_one_version_per_revision_and_keeps_permission_snapshots(
+    client,
+    admin_headers,
+    db_session,
+):
+    content_id = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers).json()["id"]
+    client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+
+    updated = client.patch(
+        f"/api/admin/contents/{content_id}",
+        json={
+            "body": "第二版正文。",
+            "summary": "第二版摘要",
+            "permission_level": "full",
+        },
+        headers=admin_headers,
+    )
+    assert updated.status_code == 200
+    client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+    client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+
+    versions = list(
+        db_session.scalars(
+            select(ContentVersion)
+            .where(ContentVersion.content_id == content_id)
+            .order_by(ContentVersion.version_no)
+        ).all()
+    )
+    chunks = list(
+        db_session.scalars(
+            select(ContentChunk)
+            .where(ContentChunk.content_id == content_id)
+            .order_by(ContentChunk.id)
+        ).all()
+    )
+    content = db_session.get(Content, content_id)
+    assert [version.version_no for version in versions] == [1, 2]
+    assert [version.permission_level for version in versions] == ["general", "full"]
+    assert [chunk.is_active for chunk in chunks] == [False, True]
+    assert [chunk.permission_level for chunk in chunks] == ["general", "full"]
+    assert content.current_version_id == versions[1].id
+    assert content.published_draft_revision == content.draft_revision == 2
+
+    history = client.get(f"/api/admin/contents/{content_id}/versions", headers=admin_headers)
+    assert history.status_code == 200
+    assert [
+        (item["version_no"], item["permission_level"])
+        for item in history.json()["items"]
+    ] == [(2, "full"), (1, "general")]
 
 
 def test_publish_republish_preserves_history_and_sets_publish_times(client, admin_headers, db_session):

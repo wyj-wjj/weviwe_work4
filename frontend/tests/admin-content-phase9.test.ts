@@ -50,6 +50,14 @@ function contentItem(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 beforeEach(() => {
   sessionStorage.clear()
   vi.restoreAllMocks()
@@ -178,17 +186,152 @@ test('admin content actions confirm publish/offline, report failed indexing, and
   )
   expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('全量级'))
   expect(getByText('内容已发布，但 AI 检索暂不可用')).toBeInTheDocument()
+  await waitFor(() => expect(getByRole('button', { name: '发布' })).toBeEnabled())
 
   await fireEvent.click(getByRole('button', { name: '重试索引' }))
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith('/admin/contents/8/retry-index'),
   )
+  await waitFor(() => expect(getByRole('button', { name: '重试索引' })).toBeEnabled())
 
   await fireEvent.click(getByRole('button', { name: '下线' }))
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith('/admin/contents/8/offline'),
   )
   expect(get.mock.calls.length).toBeGreaterThan(1)
+})
+
+test('publish pending prevents duplicate requests and disables every mutation for the same content', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(apiClient, 'get').mockResolvedValue({
+    data: {
+      items: [
+        contentItem({
+          id: 8,
+          status: 'published',
+          current_version_id: 8,
+          current_version_no: 1,
+          index_status: 'failed',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+    },
+  })
+  const pending = deferred<{ data: ReturnType<typeof contentItem> }>()
+  const post = vi.spyOn(apiClient, 'post').mockReturnValue(pending.promise)
+
+  const { getByRole, getByText } = await renderAdmin('/admin/contents')
+  await waitFor(() => expect(getByText('基础接待话术')).toBeInTheDocument())
+
+  const publishButton = getByRole('button', { name: '发布' })
+  await fireEvent.click(publishButton)
+  await fireEvent.click(publishButton)
+
+  expect(post).toHaveBeenCalledTimes(1)
+  expect(post).toHaveBeenCalledWith('/admin/contents/8/publish')
+  expect(getByRole('button', { name: '发布中' })).toBeDisabled()
+  expect(getByRole('button', { name: '下线' })).toBeDisabled()
+  expect(getByRole('button', { name: '重试索引' })).toBeDisabled()
+
+  pending.resolve({
+    data: contentItem({
+      id: 8,
+      status: 'published',
+      current_version_id: 8,
+      current_version_no: 1,
+      index_status: 'synced',
+    }),
+  })
+  await waitFor(() => expect(getByRole('button', { name: '发布' })).toBeEnabled())
+})
+
+test.each([
+  ['下线', '/admin/contents/8/offline', '下线中'],
+  ['重试索引', '/admin/contents/8/retry-index', '重试中'],
+] as const)(
+  '%s pending disables all same-content mutations',
+  async (actionName, endpoint, pendingLabel) => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: {
+        items: [
+          contentItem({
+            id: 8,
+            status: 'published',
+            current_version_id: 8,
+            current_version_no: 1,
+            index_status: 'failed',
+          }),
+        ],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    })
+    const pending = deferred<{ data: ReturnType<typeof contentItem> }>()
+    const post = vi.spyOn(apiClient, 'post').mockReturnValue(pending.promise)
+
+    const { getByRole, getByText } = await renderAdmin('/admin/contents')
+    await waitFor(() => expect(getByText('基础接待话术')).toBeInTheDocument())
+
+    await fireEvent.click(getByRole('button', { name: actionName }))
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith(endpoint)
+    expect(getByRole('button', { name: pendingLabel })).toBeDisabled()
+    expect(getByRole('button', { name: '发布' })).toBeDisabled()
+    for (const button of [
+      getByRole('button', { name: pendingLabel }),
+      getByRole('button', {
+        name: actionName === '下线' ? '重试索引' : '下线',
+      }),
+    ]) {
+      expect(button).toBeDisabled()
+    }
+
+    pending.resolve({
+      data: contentItem({
+        id: 8,
+        status: 'published',
+        current_version_id: 8,
+        current_version_no: 1,
+        index_status: 'synced',
+      }),
+    })
+    await waitFor(() => expect(getByRole('button', { name: actionName })).toBeEnabled())
+  },
+)
+
+test('canceling publish or offline confirmation has no API side effects', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(false)
+  vi.spyOn(apiClient, 'get').mockResolvedValue({
+    data: {
+      items: [
+        contentItem({
+          id: 8,
+          status: 'published',
+          current_version_id: 8,
+          current_version_no: 1,
+          index_status: 'synced',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+    },
+  })
+  const post = vi.spyOn(apiClient, 'post')
+
+  const { getByRole, getByText } = await renderAdmin('/admin/contents')
+  await waitFor(() => expect(getByText('基础接待话术')).toBeInTheDocument())
+
+  await fireEvent.click(getByRole('button', { name: '发布' }))
+  await fireEvent.click(getByRole('button', { name: '下线' }))
+
+  expect(window.confirm).toHaveBeenCalledTimes(2)
+  expect(post).not.toHaveBeenCalled()
 })
 
 test('admin content editor validates common fields and builds type-specific payloads', async () => {

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus
@@ -39,6 +39,8 @@ class Content(TimestampMixin, Base):
     draft_summary: Mapped[str | None] = mapped_column(Text)
     draft_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     draft_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    published_draft_revision: Mapped[int | None] = mapped_column(Integer)
     current_version_id: Mapped[int | None] = mapped_column(
         ForeignKey("content_versions.id", use_alter=True, name="fk_contents_current_version_id"),
         nullable=True,
@@ -69,6 +71,7 @@ class ContentVersion(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     structured_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    permission_level: Mapped[str] = mapped_column(String(32), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -79,6 +82,12 @@ class ContentVersion(Base):
     creator = relationship("User", back_populates="created_versions", foreign_keys=[created_by])
     chunks = relationship("ContentChunk", back_populates="version")
     vector_index_records = relationship("VectorIndexRecord", back_populates="version")
+
+
+@event.listens_for(ContentVersion, "before_insert")
+def snapshot_content_version_permission(_mapper, _connection, version: ContentVersion) -> None:
+    if not version.permission_level and version.content is not None:
+        version.permission_level = version.content.permission_level
 
 
 class ContentChunk(TimestampMixin, Base):
