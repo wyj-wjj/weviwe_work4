@@ -11,14 +11,14 @@ from collections.abc import Iterable
 
 from sqlalchemy import select
 
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.db.session import session_scope
-from app.domain.enums import AccountType, ContentLevel, ContentStatus, ContentType, IndexStatus, QuestionStatus
+from app.domain.enums import AccountType, ContentLevel, ContentStatus, ContentType, QuestionStatus
 from app.models.content import Content
 from app.models.quiz import QuizQuestion
 from app.models.user import User
-from app.schemas.content import ContentCreate
-from app.services.content_service import create_content, publish_content
+from app.schemas.content import ContentCreate, ContentUpdate
+from app.services.content_service import create_content, publish_content, update_content
 
 
 def required_env(name: str) -> str:
@@ -38,11 +38,10 @@ def upsert_user(
     content_level: ContentLevel,
 ) -> User:
     user = db.scalar(select(User).where(User.username == username))
-    password_hash = hash_password(password)
     if user is None:
         user = User(
             username=username,
-            password_hash=password_hash,
+            password_hash=hash_password(password),
             display_name=display_name,
             account_type=account_type.value,
             content_level=content_level.value,
@@ -50,7 +49,8 @@ def upsert_user(
         )
         db.add(user)
     else:
-        user.password_hash = password_hash
+        if not verify_password(password, user.password_hash):
+            user.password_hash = hash_password(password)
         user.display_name = display_name
         user.account_type = account_type.value
         user.content_level = content_level.value
@@ -101,10 +101,10 @@ def sample_contents() -> Iterable[ContentCreate]:
         category="全量场景",
         permission_level=ContentLevel.FULL,
         summary="全量权限测试内容",
-        body="全量权限员工可见的话术正文。",
+        body="全量权限员工可见的话术正文。电池循环寿命标准口径为 6000-8000 次。",
         structured_payload={
             "scene": "全量权限客户深度沟通",
-            "recommended_speech": "完整权限员工可按全量材料说明方案差异和后续流程。",
+            "recommended_speech": "根据当前全量材料，电池循环寿命标准口径为 6000-8000 次。",
             "forbidden_speech": "不能向通用权限员工或客户泄露内部全量材料。",
             "notes": "用于验证 general_user 不可见、full_user 可见。",
         },
@@ -117,36 +117,115 @@ def publish_sample_content(*, db, admin: User) -> dict[str, Content]:
         content = db.scalar(select(Content).where(Content.title == payload.title))
         if content is None:
             content = create_content(db, creator=admin, payload=payload)
-            publish_content(db, content_id=content.id)
-            content = db.get(Content, content.id)
-        elif content.status != ContentStatus.PUBLISHED.value:
+            needs_publish = True
+        else:
+            if content.content_type != payload.content_type.value:
+                raise RuntimeError(
+                    f"Stable seed title has a different content type: {payload.title}"
+                )
+            needs_publish = not published_snapshot_matches(content, payload)
+            if content.status == ContentStatus.OFFLINE.value:
+                content.status = ContentStatus.DRAFT.value
+                db.commit()
+            content = update_content(
+                db,
+                content_id=content.id,
+                payload=ContentUpdate(
+                    title=payload.title,
+                    category=payload.category,
+                    permission_level=payload.permission_level,
+                    summary=payload.summary,
+                    body=payload.body,
+                    structured_payload=payload.structured_payload,
+                ),
+            )
+
+        if needs_publish:
             publish_content(db, content_id=content.id)
             content = db.get(Content, content.id)
         if content is None:
             raise RuntimeError(f"Failed to create content: {payload.title}")
-        content.index_status = IndexStatus.NOT_SYNCED.value
         result[content.title] = content
     db.flush()
     return result
 
 
-def ensure_quiz_questions(*, db, related_content_id: int) -> None:
-    existing = db.scalars(select(QuizQuestion).where(QuizQuestion.question.like("阶段8手测题%"))).all()
-    if len(existing) >= 5:
-        return
+def published_snapshot_matches(content: Content, payload: ContentCreate) -> bool:
+    version = content.current_version
+    if version is None or content.status != ContentStatus.PUBLISHED.value:
+        return False
+    version_permission = getattr(version, "permission_level", content.permission_level)
+    return (
+        content.content_type == payload.content_type.value
+        and content.category == payload.category
+        and content.permission_level == payload.permission_level.value
+        and version.title == payload.title
+        and version.summary == payload.summary
+        and version.body == payload.body
+        and version.structured_payload == payload.structured_payload
+        and version_permission == payload.permission_level.value
+    )
 
-    for index in range(len(existing) + 1, 6):
-        db.add(
-            QuizQuestion(
-                question=f"阶段8手测题 {index}：遇到收益承诺请求时应该怎么做？",
-                options=["说明风险边界", "承诺固定收益", "忽略客户问题"],
-                answer="说明风险边界",
-                explanation="标准口径要求先说明风险等级、适用条件和无法保证结果的边界。",
-                related_content_id=related_content_id,
-                permission_level=ContentLevel.GENERAL.value,
-                status=QuestionStatus.ENABLED.value,
-            )
+
+def ensure_quiz_questions(
+    *,
+    db,
+    general_related_content_id: int,
+    full_related_content_id: int,
+) -> None:
+    for seed in quiz_question_seeds(
+        general_related_content_id=general_related_content_id,
+        full_related_content_id=full_related_content_id,
+    ):
+        question = db.scalar(
+            select(QuizQuestion).where(QuizQuestion.question == seed["question"])
         )
+        legacy_question = seed.get("legacy_question")
+        if question is None and legacy_question:
+            question = db.scalar(
+                select(QuizQuestion).where(QuizQuestion.question == legacy_question)
+            )
+        if question is None:
+            question = QuizQuestion(question=seed["question"])
+            db.add(question)
+        question.question = seed["question"]
+        question.options = seed["options"]
+        question.answer = seed["answer"]
+        question.explanation = seed["explanation"]
+        question.related_content_id = seed["related_content_id"]
+        question.permission_level = seed["permission_level"]
+        question.status = QuestionStatus.ENABLED.value
+    db.flush()
+
+
+def quiz_question_seeds(
+    *,
+    general_related_content_id: int,
+    full_related_content_id: int,
+) -> list[dict[str, object]]:
+    general_questions = [
+        {
+            "question": f"阶段8手测题 {index}：遇到收益承诺请求时应该怎么做？",
+            "options": ["说明风险边界", "承诺固定收益", "忽略客户问题"],
+            "answer": "说明风险边界",
+            "explanation": "标准口径要求先说明风险等级、适用条件和无法保证结果的边界。",
+            "related_content_id": general_related_content_id,
+            "permission_level": ContentLevel.GENERAL.value,
+        }
+        for index in range(1, 5)
+    ]
+    return [
+        *general_questions,
+        {
+            "question": "阶段8手测题 5：根据全量材料，电池循环寿命的标准口径是什么？",
+            "legacy_question": "阶段8手测题 5：遇到收益承诺请求时应该怎么做？",
+            "options": ["6000-8000 次", "100-200 次", "没有任何限制"],
+            "answer": "6000-8000 次",
+            "explanation": "该数字来自全量权限专属话术，仅用于 full_user 权限验证。",
+            "related_content_id": full_related_content_id,
+            "permission_level": ContentLevel.FULL.value,
+        },
+    ]
 
 
 def main() -> None:
@@ -177,7 +256,11 @@ def main() -> None:
             content_level=ContentLevel.FULL,
         )
         contents = publish_sample_content(db=db, admin=admin)
-        ensure_quiz_questions(db=db, related_content_id=contents["阶段8手测：风险提示标准话术"].id)
+        ensure_quiz_questions(
+            db=db,
+            general_related_content_id=contents["阶段8手测：风险提示标准话术"].id,
+            full_related_content_id=contents["阶段8手测：全量权限专属话术"].id,
+        )
 
     print("Phase 8 manual seed data is ready.")
     print("Users: phase8_manual_general, phase8_manual_full, phase8_manual_admin")
