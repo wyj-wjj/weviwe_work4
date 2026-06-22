@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
+const route = useRoute()
 const router = useRouter()
 const question = ref('')
 const questionError = ref('')
@@ -25,10 +26,17 @@ function submitQuestion() {
     return
   }
 
+  const currentRequest = Array.isArray(route.query.request)
+    ? route.query.request[0]
+    : route.query.request
+  const parsedRequest = Number.parseInt(currentRequest ?? '0', 10)
+  const nextRequest = Number.isFinite(parsedRequest) ? parsedRequest + 1 : 1
+
   router.push({
     name: 'employee-ai-answer',
     query: {
       question: normalizedQuestion,
+      request: String(nextRequest),
     },
   })
 }

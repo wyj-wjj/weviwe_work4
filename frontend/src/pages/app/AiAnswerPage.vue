@@ -20,8 +20,8 @@ const question = computed(() => {
 })
 
 watch(
-  question,
-  async (currentQuestion) => {
+  [question, () => route.query.request],
+  async ([currentQuestion]) => {
     requestSequence += 1
     const sequence = requestSequence
     activeController?.abort()

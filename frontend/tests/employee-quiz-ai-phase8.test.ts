@@ -401,25 +401,45 @@ test('AI page releases a completed request before it unmounts', async () => {
   expect(signal?.aborted).toBe(false)
 })
 
-test('employee AI form routes the same normalized question again after AI is unavailable', async () => {
-  mockedAskRag.mockRejectedValue({
+test('an older request finishing does not release the newer request controller', async () => {
+  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
+  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(1))
+  await view.router.push('/app/ask?question=新问题')
+  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(2))
+  const newSignal = mockedAskRag.mock.calls[1]?.[1]
+
+  oldRequest.resolve({ hit: true, answer: '旧回答', sources: [] })
+  await oldRequest.promise
+  await Promise.resolve()
+  view.unmount()
+
+  expect(newSignal?.aborted).toBe(true)
+  newRequest.reject({ name: 'AbortError' })
+  await newRequest.promise.catch(() => undefined)
+})
+
+test('employee AI form retries the same question after AI is unavailable', async () => {
+  const retryRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockRejectedValueOnce({
     status: 503,
     code: 'ai_unavailable',
   })
+  mockedAskRag.mockReturnValueOnce(retryRequest.promise)
 
   const view = await renderAppPage(AiAnswerPage, '/app/ask?question=同一个问题')
   await waitFor(() => {
     expect(view.getByText('智能问答暂不可用，请稍后重试')).toBeInTheDocument()
   })
-  const push = vi.spyOn(view.router, 'push')
 
   await fireEvent.update(view.getByLabelText('AI 问题'), '  同一个问题  ')
   await fireEvent.click(view.getByRole('button', { name: '提问' }))
+  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(2))
 
-  expect(push).toHaveBeenCalledWith({
-    name: 'employee-ai-answer',
-    query: {
-      question: '同一个问题',
-    },
-  })
+  retryRequest.resolve({ hit: true, answer: '重试后的新回答', sources: [] })
+
+  await waitFor(() => expect(view.getByText('重试后的新回答')).toBeInTheDocument())
 })
