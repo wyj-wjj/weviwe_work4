@@ -14,7 +14,7 @@ def user_payload(**overrides):
     return payload
 
 
-def test_admin_can_create_list_edit_reset_and_disable_users(client, admin_headers, db_session):
+def test_admin_can_create_list_edit_reset_disable_and_enable_users(client, admin_headers, db_session):
     created = client.post("/api/admin/users", json=user_payload(), headers=admin_headers)
     assert created.status_code == 201
     user_id = created.json()["id"]
@@ -61,7 +61,18 @@ def test_admin_can_create_list_edit_reset_and_disable_users(client, admin_header
         "/api/auth/login",
         json={"username": "phase9-user", "password": "new-temporary-password"},
     )
-    assert login.status_code == 401
+    assert login.status_code == 403
+    assert login.json()["error"]["code"] == "account_disabled"
+
+    enabled = client.post(f"/api/admin/users/{user_id}/enable", headers=admin_headers)
+    assert enabled.status_code == 200
+    assert enabled.json()["is_active"] is True
+
+    relogin = client.post(
+        "/api/auth/login",
+        json={"username": "phase9-user", "password": "new-temporary-password"},
+    )
+    assert relogin.status_code == 200
 
 
 def test_admin_user_management_rejects_duplicates_and_non_admins(

@@ -40,7 +40,7 @@ def test_login_returns_identity_account_type_content_level_and_access_token(clie
     assert payload["token_type"] == "bearer"
 
 
-def test_login_failures_do_not_reveal_whether_username_password_or_status_failed(client, db_session) -> None:
+def test_login_failures_keep_missing_users_and_wrong_passwords_generic(client, db_session) -> None:
     add_user(
         db_session,
         username="disabled-user",
@@ -52,7 +52,6 @@ def test_login_failures_do_not_reveal_whether_username_password_or_status_failed
 
     responses = [
         client.post("/api/auth/login", json={"username": "missing-user", "password": "anything"}),
-        client.post("/api/auth/login", json={"username": "disabled-user", "password": "correct-password"}),
         client.post("/api/auth/login", json={"username": "disabled-user", "password": "wrong-password"}),
     ]
 
@@ -65,6 +64,31 @@ def test_login_failures_do_not_reveal_whether_username_password_or_status_failed
                 "details": None,
             }
         }
+
+
+def test_login_with_correct_password_for_disabled_account_reports_disabled_status(client, db_session) -> None:
+    add_user(
+        db_session,
+        username="disabled-user",
+        password="correct-password",
+        account_type="general_user",
+        content_level="general",
+        is_active=False,
+    )
+
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "disabled-user", "password": "correct-password"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": {
+            "code": "account_disabled",
+            "message": "账号已被禁用，请联系管理员。",
+            "details": None,
+        }
+    }
 
 
 def test_current_user_dependency_rejects_missing_token_and_accepts_valid_token(client, db_session) -> None:

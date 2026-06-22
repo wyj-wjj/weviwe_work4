@@ -10,6 +10,7 @@ from app.schemas.user import UserCreate, UserPasswordReset, UserUpdate
 from app.services.user_service import (
     create_user,
     disable_user,
+    enable_user,
     list_users,
     reset_user_password,
     update_user,
@@ -73,3 +74,12 @@ def admin_disable_user(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return user_to_admin_dict(disable_user(db, user_id=user_id, current_admin_id=admin.id))
+
+
+@router.post("/api/admin/users/{user_id}/enable")
+def admin_enable_user(
+    user_id: int,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return user_to_admin_dict(enable_user(db, user_id=user_id))

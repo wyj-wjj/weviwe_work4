@@ -31,8 +31,10 @@ def invalid_credentials_error() -> AppError:
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     user = db.scalar(select(User).where(User.username == payload.username))
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+    if user is None or not verify_password(payload.password, user.password_hash):
         raise invalid_credentials_error()
+    if not user.is_active:
+        raise AppError(code="account_disabled", message="账号已被禁用，请联系管理员。", status_code=403)
 
     token = create_access_token(
         subject=str(user.id),

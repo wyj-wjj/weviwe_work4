@@ -4,7 +4,7 @@
 - 前端是一个 Vue 3 + TypeScript + Vite SPA，承载登录页、员工端 `/app` 和后台端 `/admin`，并通过 Pinia 保存会话状态、通过 Vue Router 守卫控制前后台入口。
 - 后端是一个 FastAPI 单体服务，承载 REST API、认证授权、内容管理、员工内容读取、测验管理、RAG 索引和 AI 问答编排。
 - MySQL 是唯一权威业务数据源；自动化测试使用 SQLite 临时库验证模型、迁移和 API 行为，不改变生产目标。
-- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status`。
+- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status` -> `0004_publish_revision_permission`。
 - Milvus 通过后端集成边界访问；自动化测试使用内存假客户端，真实模式使用 PyMilvus `MilvusClient` 写入本地 Milvus，Milvus 只作为向量索引，不保存权威正文。
 - DashScope 只能由后端调用；真实模式通过 OpenAI-compatible `/embeddings` 和 `/chat/completions` 调用，自动化测试使用假客户端或 `httpx.MockTransport`，不默认调用真实模型服务。
 
@@ -49,6 +49,7 @@
 - `PATCH /api/admin/users/{user_id}`：管理员编辑员工展示名、账号类型、内容权限和启用状态。
 - `POST /api/admin/users/{user_id}/reset-password`：管理员重置员工密码，只返回成功标志。
 - `POST /api/admin/users/{user_id}/disable`：管理员禁用员工账号；禁用后登录和已有 token 请求均会被拒绝。
+- `POST /api/admin/users/{user_id}/enable`：管理员重新启用员工账号；管理员账号仍不允许通过员工账号入口管理。
 
 ## 文件职责
 
@@ -79,6 +80,7 @@
 - `backend/alembic/versions/0001_initial_schema.py`：初始表结构迁移，创建用户、内容、版本、chunk、向量索引记录、测验题和未命中问题表。
 - `backend/alembic/versions/0002_add_content_draft_fields.py`：为 `contents` 增加 `draft_summary`、`draft_body`、`draft_payload`，让草稿与已发布版本快照解耦。
 - `backend/alembic/versions/0003_add_content_index_status.py`：为 `contents` 增加 `index_status`，持久化未同步、已同步和同步失败状态。
+- `backend/alembic/versions/0004_add_publish_revision_and_version_permission.py`：为内容发布增加草稿修订号、已发布修订号和版本权限快照，支持发布幂等与历史权限追溯。
 
 ### 后端领域与模型
 - `backend/app/domain/__init__.py`：领域模块包标记。
@@ -100,7 +102,7 @@
 - `backend/app/api/routes/quiz.py`：后台测验题管理接口和员工测验获取/提交接口。
 - `backend/app/api/routes/rag.py`：员工 AI 问答接口，调用 RAG 编排服务并返回回答、来源或未命中提示。
 - `backend/app/api/routes/missed_question.py`：后台未命中问题列表和标记已处理接口。
-- `backend/app/api/routes/user.py`：后台员工账号创建、分页列表、编辑、密码重置和禁用接口；全部依赖管理员鉴权。
+- `backend/app/api/routes/user.py`：后台员工账号创建、分页列表、编辑、密码重置、禁用和启用接口；全部依赖管理员鉴权。
 - `backend/app/schemas/__init__.py`：schema 模块包标记。
 - `backend/app/schemas/auth.py`：登录请求和登录响应模型。
 - `backend/app/schemas/user.py`：用户创建、编辑、密码重置输入和公开用户响应模型；员工密码至少 8 位，并校验账号类型和内容权限组合。
@@ -113,7 +115,7 @@
 - `backend/app/services/rag_index_service.py`：内容切片、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
 - `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、候选召回、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
 - `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
-- `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置和禁用；拒绝普通账号管理入口操作管理员账号。
+- `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置、禁用和启用；拒绝普通账号管理入口操作管理员账号。
 
 ### 后端运维命令
 - `backend/app/cli/__init__.py`：后端运维 CLI 包标记。
@@ -149,7 +151,7 @@
 - `backend/tests/test_rag_index_phase6.py`：切片规则、稳定 hash、索引成功、索引失败和重试索引测试。
 - `backend/tests/test_rag_phase6.py`：RAG 问题 embedding、权限过滤、低分未命中、MySQL 回查、API 成功/未授权/供应商不可用测试。
 - `backend/tests/test_missed_questions_phase6.py`：未命中问题快照、后台列表、标记已处理和非管理员拒绝测试。
-- `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、重复用户名、非管理员拒绝和管理员账号保护测试。
+- `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、启用、重复用户名、非管理员拒绝和管理员账号保护测试。
 - `backend/tests/test_admin_support_phase9.py`：阶段 9 后台展示契约测试，覆盖测验关联内容/更新时间和历史版本发布人展示名。
 - `backend/tests/test_e2e_fixture_phase10.py`：阶段 10 后端夹具准备测试，覆盖三类账号登录、跨权限内容/题目、确定性 RAG 命中和未命中、索引记录数量。
 - `backend/tests/test_dashscope_http_phase11.py`：使用 `httpx.MockTransport` 验证真实 DashScope embedding/chat 请求、响应解析和供应商错误映射，不访问外网。
@@ -178,7 +180,7 @@
 - `frontend/src/api/auth.ts`：登录 API 封装，响应字段与后端 `LoginResponse` 对齐。
 - `frontend/src/api/admin-content.ts`：后台内容 API 和 TypeScript 契约，覆盖列表筛选分页、详情、创建、编辑、发布、下线、历史版本和索引重试。
 - `frontend/src/api/admin-quiz.ts`：后台测验题 API 和类型，覆盖列表、新建、编辑、启用和禁用。
-- `frontend/src/api/admin-users.ts`：后台员工账号 API 和类型，覆盖列表、新建、编辑、密码重置和禁用。
+- `frontend/src/api/admin-users.ts`：后台员工账号 API 和类型，覆盖列表、新建、编辑、密码重置、禁用和启用。
 - `frontend/src/api/admin-missed-questions.ts`：后台未命中问题 API 和类型，覆盖状态筛选列表和标记已处理。
 - `frontend/src/pages/LoginPage.vue`：登录页，包含账号密码表单、必填校验、登录 API 调用、成功跳转和通用失败提示。
 - `frontend/src/pages/EmployeeHomePage.vue`：员工首页正文区域，承载员工共享布局下的今日入口提示。
@@ -187,7 +189,7 @@
 - `frontend/src/pages/admin/ContentEditorPage.vue`：后台内容新建/编辑表单，按内容类型生成结构化载荷，保存后返回内容列表。
 - `frontend/src/pages/admin/ContentHistoryPage.vue`：后台历史版本页，展示版本号、标题、发布时间、发布人、权限和正文快照。
 - `frontend/src/pages/admin/QuizQuestionsPage.vue`：后台测验题列表与内联编辑器，支持新建、编辑和启停。
-- `frontend/src/pages/admin/UsersPage.vue`：后台账号列表与内联编辑器，支持员工账号新建、编辑、密码重置和禁用；管理员账号只读。
+- `frontend/src/pages/admin/UsersPage.vue`：后台账号列表与内联编辑器，支持员工账号新建、编辑、密码重置、禁用和启用；管理员账号只读。
 - `frontend/src/pages/admin/MissedQuestionsPage.vue`：后台未命中问题列表，支持状态筛选和标记已处理，不包含统计看板。
 - `frontend/src/styles/base.css`：全局基础样式、页面宽度约束，以及阶段 9 后台表格、筛选器、表单、状态标签、分页和响应式样式。
 - `frontend/src/vite-env.d.ts`：Vite 类型声明。
@@ -219,7 +221,7 @@
 - 2026-06-17 已使用本地 MySQL 创建/复用 `weview_mvp` 并执行 Alembic `upgrade head`。
 - 阶段 4/5 烟测数据包含 `phase45_admin`、`phase45_general`、`phase45_full` 三类账号，以及一条通用最新必读、一条全量标准话术和五道通用测验题。
 - 阶段 4/5 烟测确认：通用用户能看到通用最新必读和通用测验题，看不到全量标准话术；完整权限用户能看到全量标准话术。
-- 阶段 6 已将本地 MySQL 升级到 `0003_add_content_index_status`；烟测数据包含 `phase6_admin`、`phase6_general` 和一条通用 RAG 内容。
+- 2026-06-22 已将本地 MySQL 升级到 `0004_publish_revision_permission`，确认 `contents.draft_revision`、`contents.published_draft_revision` 和 `content_versions.permission_level` 已存在；内容列表、员工内容、测验和 RAG 接口不再因 ORM/表结构不一致返回 500。
 - 阶段 6 烟测确认：内容发布后索引状态为 `synced`，RAG 命中返回带来源的回答，低分未命中返回固定提示并写入后台未命中列表。
 - 真实 Milvus 写入已验证：`localhost:19530` 可连接，`weview_content_chunks` collection 已创建/复用，阶段 6 索引同步流程写入 `content-4-version-4-chunk-4` 后立即检索命中。
 - MySQL root 密码和任何真实密钥不得写入仓库；以上记录只保存库名、账号名和行为结果。

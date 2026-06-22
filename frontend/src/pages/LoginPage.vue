@@ -40,8 +40,12 @@ async function submitLogin() {
     })
     auth.setSession(result.access_token, result.user)
     await router.push(auth.defaultRoute)
-  } catch {
-    loginError.value = '账号或密码错误，请重新输入'
+  } catch (error) {
+    const apiError = error as { code?: string; message?: string }
+    loginError.value =
+      apiError.code === 'account_disabled' && apiError.message
+        ? apiError.message
+        : '账号或密码错误，请重新输入'
   } finally {
     isSubmitting.value = false
   }

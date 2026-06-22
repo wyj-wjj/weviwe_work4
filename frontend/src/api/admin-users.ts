@@ -59,3 +59,8 @@ export async function disableAdminUser(userId: number) {
   const response = await apiClient.post<AdminUser>(`/admin/users/${userId}/disable`)
   return response.data
 }
+
+export async function enableAdminUser(userId: number) {
+  const response = await apiClient.post<AdminUser>(`/admin/users/${userId}/enable`)
+  return response.data
+}

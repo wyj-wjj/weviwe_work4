@@ -4,6 +4,7 @@ import { onMounted, reactive, ref } from 'vue'
 import {
   createAdminUser,
   disableAdminUser,
+  enableAdminUser,
   listAdminUsers,
   resetAdminUserPassword,
   updateAdminUser,
@@ -164,6 +165,19 @@ async function disable(user: AdminUser) {
   }
 }
 
+async function enable(user: AdminUser) {
+  if (!window.confirm(`确认启用账号“${user.username}”吗？`)) {
+    return
+  }
+  try {
+    await enableAdminUser(user.id)
+    message.value = '账号已启用'
+    await loadUsers()
+  } catch {
+    message.value = '账号启用失败，请稍后重试'
+  }
+}
+
 onMounted(loadUsers)
 </script>
 
@@ -267,6 +281,13 @@ onMounted(loadUsers)
                     @click="disable(user)"
                   >
                     禁用账号
+                  </button>
+                  <button
+                    v-else-if="!user.is_active"
+                    type="button"
+                    @click="enable(user)"
+                  >
+                    启用账号
                   </button>
                 </div>
                 <span v-else>系统管理员只读</span>

@@ -113,7 +113,7 @@ test('admin quiz page lists, creates, edits, enables, and disables questions', a
   expect(get.mock.calls.length).toBeGreaterThan(1)
 })
 
-test('admin users page creates, edits, resets, and disables accounts with one-time reset feedback', async () => {
+test('admin users page creates, edits, resets, disables, and enables accounts with one-time reset feedback', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
     data: {
@@ -127,6 +127,15 @@ test('admin users page creates, edits, resets, and disables accounts with one-ti
           is_active: true,
           updated_at: '2026-06-18T08:30:00',
         },
+        {
+          id: 8,
+          username: 'phase9-disabled',
+          display_name: '阶段九禁用员工',
+          account_type: 'general_user',
+          content_level: 'general',
+          is_active: false,
+          updated_at: '2026-06-18T08:35:00',
+        },
       ],
       total: 1,
       page: 1,
@@ -136,11 +145,11 @@ test('admin users page creates, edits, resets, and disables accounts with one-ti
   const post = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: { reset: true } })
   const patch = vi.spyOn(apiClient, 'patch').mockResolvedValue({ data: {} })
 
-  const { getByLabelText, getByRole, getByText } = await renderAdmin('/admin/users')
+  const { getAllByRole, getByLabelText, getByRole, getByText } = await renderAdmin('/admin/users')
 
   await waitFor(() => expect(getByText('phase9-user')).toBeInTheDocument())
   expect(getByText('阶段九员工')).toBeInTheDocument()
-  expect(getByText('通用权限员工')).toBeInTheDocument()
+  expect(getByText('阶段九禁用员工')).toBeInTheDocument()
   expect(getByText('启用')).toBeInTheDocument()
 
   await fireEvent.click(getByRole('button', { name: '新增账号' }))
@@ -158,7 +167,7 @@ test('admin users page creates, edits, resets, and disables accounts with one-ti
     })
   })
 
-  await fireEvent.click(getByRole('button', { name: '编辑' }))
+  await fireEvent.click(getAllByRole('button', { name: '编辑' })[0])
   await fireEvent.update(getByLabelText('展示名'), '完整权限员工')
   await fireEvent.update(getByLabelText('账号类型'), 'full_user')
   await fireEvent.update(getByLabelText('内容权限级别'), 'full')
@@ -172,7 +181,7 @@ test('admin users page creates, edits, resets, and disables accounts with one-ti
     }),
   )
 
-  await fireEvent.click(getByRole('button', { name: '重置密码' }))
+  await fireEvent.click(getAllByRole('button', { name: '重置密码' })[0])
   await fireEvent.update(getByLabelText('新密码'), 'new-temporary-password')
   await fireEvent.click(getByRole('button', { name: '确认重置' }))
   await waitFor(() =>
@@ -185,6 +194,9 @@ test('admin users page creates, edits, resets, and disables accounts with one-ti
   await fireEvent.click(getByRole('button', { name: '禁用账号' }))
   expect(post).toHaveBeenCalledWith('/admin/users/7/disable')
   expect(window.confirm).toHaveBeenCalled()
+
+  await fireEvent.click(getByRole('button', { name: '启用账号' }))
+  expect(post).toHaveBeenCalledWith('/admin/users/8/enable')
   expect(get.mock.calls.length).toBeGreaterThan(1)
 })
 

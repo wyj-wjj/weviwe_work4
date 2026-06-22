@@ -70,7 +70,7 @@ test('successful login stores user identity and routes to the correct default pa
   })
 })
 
-test('invalid credentials and disabled accounts show the same generic login failure', async () => {
+test('invalid credentials show the generic login failure', async () => {
   const { getByLabelText, getByRole, getByText } = renderLoginPage()
 
   mockedLogin.mockRejectedValue({
@@ -86,6 +86,25 @@ test('invalid credentials and disabled accounts show the same generic login fail
 
   await waitFor(() => {
     expect(getByText('账号或密码错误，请重新输入')).toBeInTheDocument()
+  })
+})
+
+test('disabled account login shows the backend account status message', async () => {
+  const { getByLabelText, getByRole, getByText } = renderLoginPage()
+
+  mockedLogin.mockRejectedValue({
+    status: 403,
+    code: 'account_disabled',
+    message: '账号已被禁用，请联系管理员。',
+    details: null,
+  })
+
+  await fireEvent.update(getByLabelText('用户名'), 'disabled-user')
+  await fireEvent.update(getByLabelText('密码'), 'correct-password')
+  await fireEvent.click(getByRole('button', { name: '登录' }))
+
+  await waitFor(() => {
+    expect(getByText('账号已被禁用，请联系管理员。')).toBeInTheDocument()
   })
 })
 

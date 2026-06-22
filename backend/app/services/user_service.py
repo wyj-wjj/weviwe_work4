@@ -111,3 +111,13 @@ def disable_user(db: Session, *, user_id: int, current_admin_id: int) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def enable_user(db: Session, *, user_id: int) -> User:
+    user = get_user_or_404(db, user_id)
+    if user.account_type == AccountType.ADMIN.value:
+        raise AppError(code="admin_account_not_manageable", message="此入口只管理员工账号。", status_code=422)
+    user.is_active = True
+    db.commit()
+    db.refresh(user)
+    return user
