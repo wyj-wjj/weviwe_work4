@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import event, inspect
 
 from app.models.quiz import QuizQuestion
@@ -69,6 +70,50 @@ def test_admin_can_create_edit_enable_disable_and_list_quiz_questions(client, ad
     listing = client.get("/api/admin/quiz-questions", headers=admin_headers)
     assert listing.status_code == 200
     assert listing.json()["total"] == 1
+
+
+def test_admin_quiz_pagination_preloads_distinct_related_contents_with_bounded_queries(
+    client,
+    admin_headers,
+    db_session,
+):
+    for index in range(5):
+        content = client.post(
+            "/api/admin/contents",
+            json=base_payload(title=f"后台关联话术 {index}"),
+            headers=admin_headers,
+        )
+        assert content.status_code == 201
+        question = client.post(
+            "/api/admin/quiz-questions",
+            json=quiz_payload(index, related_content_id=content.json()["id"]),
+            headers=admin_headers,
+        )
+        assert question.status_code == 201
+
+    db_session.expunge_all()
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", record_statement)
+    try:
+        response = client.get(
+            "/api/admin/quiz-questions?page=1&page_size=5",
+            headers=admin_headers,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 5
+    content_selects = [
+        " ".join(statement.split())
+        for statement in statements
+        if "FROM contents" in statement
+    ]
+    assert len(content_selects) <= 1
 
 
 def test_employee_quiz_returns_five_to_ten_visible_enabled_questions(
@@ -385,3 +430,33 @@ def test_quiz_submit_rejects_missing_and_disabled_questions(
             headers=general_user_headers,
         )
         assert response.status_code == 404
+
+
+@pytest.mark.parametrize("answer_count", [0, 11])
+def test_quiz_submit_requires_one_to_ten_answers(
+    client,
+    admin_headers,
+    general_user_headers,
+    answer_count,
+):
+    question_id = create_quiz_questions(
+        client,
+        admin_headers,
+        1,
+        permission_level="general",
+    )[0]
+
+    response = client.post(
+        "/api/app/quiz/submit",
+        json={
+            "answers": [
+                {
+                    "question_id": question_id,
+                    "selected_answer": "确认需求",
+                }
+                for _index in range(answer_count)
+            ]
+        },
+        headers=general_user_headers,
+    )
+    assert response.status_code == 422

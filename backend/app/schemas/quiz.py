@@ -31,4 +31,4 @@ class QuizSubmitAnswer(BaseModel):
 
 
 class QuizSubmitRequest(BaseModel):
-    answers: list[QuizSubmitAnswer]
+    answers: list[QuizSubmitAnswer] = Field(min_length=1, max_length=10)

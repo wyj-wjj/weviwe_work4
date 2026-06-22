@@ -88,7 +88,12 @@ def set_quiz_status(db: Session, *, question_id: int, status: QuestionStatus) ->
 def list_quiz_questions(db: Session, *, page: int = 1, page_size: int = 20) -> tuple[list[QuizQuestion], int]:
     stmt = select(QuizQuestion)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    items = db.scalars(stmt.order_by(QuizQuestion.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    items = db.scalars(
+        stmt.options(joinedload(QuizQuestion.related_content))
+        .order_by(QuizQuestion.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
     return list(items), total
 
 
