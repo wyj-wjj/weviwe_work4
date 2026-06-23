@@ -102,7 +102,7 @@ class DashScopeHttpClient:
         }
         if self.http_client is not None:
             return self.http_client.post(url, headers=headers, json=payload)
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=self.settings.dashscope_http_timeout_seconds, trust_env=False) as client:
             return client.post(url, headers=headers, json=payload)
 
     @staticmethod

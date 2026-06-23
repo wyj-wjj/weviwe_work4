@@ -173,6 +173,8 @@ test('admin content actions confirm publish/offline, report failed indexing, and
       id: 8,
       title: '待处理话术',
       status: url.endsWith('/offline') ? 'offline' : 'published',
+      current_version_id: 8,
+      current_version_no: 2,
       index_status: url.endsWith('/retry-index') ? 'synced' : 'failed',
     }),
   }))
@@ -199,6 +201,48 @@ test('admin content actions confirm publish/offline, report failed indexing, and
     expect(post).toHaveBeenCalledWith('/admin/contents/8/offline'),
   )
   expect(get.mock.calls.length).toBeGreaterThan(1)
+})
+
+test('publish response must confirm published status before reporting success', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(apiClient, 'get').mockResolvedValue({
+    data: {
+      items: [
+        contentItem({
+          id: 8,
+          title: '异常发布话术',
+          status: 'draft',
+          current_version_id: null,
+          current_version_no: null,
+          index_status: 'not_synced',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+    },
+  })
+  const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+    data: contentItem({
+      id: 8,
+      title: '异常发布话术',
+      status: 'draft',
+      current_version_id: null,
+      current_version_no: null,
+      index_status: 'not_synced',
+    }),
+  })
+
+  const { getByRole, getByText, queryByText } = await renderAdmin('/admin/contents')
+  await waitFor(() => expect(getByText('异常发布话术')).toBeInTheDocument())
+
+  await fireEvent.click(getByRole('button', { name: '发布' }))
+
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish'),
+  )
+  expect(getByText('发布未完成，请刷新后确认内容状态')).toBeInTheDocument()
+  expect(queryByText('内容发布成功')).not.toBeInTheDocument()
 })
 
 test('publish pending prevents duplicate requests and disables every mutation for the same content', async () => {

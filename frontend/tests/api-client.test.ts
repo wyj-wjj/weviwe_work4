@@ -34,6 +34,20 @@ test('failed requests are normalized to a consistent error path', () => {
   })
 })
 
+test('request timeouts are normalized as timeout errors', () => {
+  const error = normalizeApiError({
+    code: 'ECONNABORTED',
+    message: 'timeout of 10000ms exceeded',
+  })
+
+  expect(error).toEqual({
+    status: 0,
+    code: 'request_timeout',
+    message: '请求等待时间较长，请稍后重试。',
+    details: null,
+  })
+})
+
 test('api client attaches the current bearer token to requests', async () => {
   const client = createApiClient('https://api.example.test', {
     getToken: () => 'session-token',

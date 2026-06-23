@@ -18,6 +18,8 @@
 - 内容发布后会触发同步索引流程；索引成功写入 `vector_index_records` 并将 `contents.index_status` 置为 `synced`，索引失败不回滚发布内容，只将状态置为 `failed`。
 - Milvus 只保存向量和过滤元数据，不保存权威正文；AI 回答前必须回查 MySQL 当前版本正文。
 - RAG 回答先做问题 embedding，再按权限召回 Milvus 候选，随后从 MySQL 回查并再次过滤已发布、当前版本、active chunk 和用户权限。
+- 2026-06-22 起 RAG 检索采用混合召回：每次问答同时执行 Milvus 向量召回和 MySQL 关键词召回，关键词路径检索当前版本标题、分类和 chunk 正文，并在 SQL 层先过滤已发布、active chunk、当前版本和当前用户权限；两路候选按分数融合去重后，再进入统一 MySQL 回查和来源摘要流程。
+- 2026-06-22 起员工端 RAG 默认采用 10 秒内响应优先的极速回答策略：命中授权来源后，后端直接基于 MySQL 回查后的当前 chunk 生成简明来源摘要，不再等待生成模型长回答；响应中的 `usage.mode=fast_extractive` 标识该模式。生成模型集成仍保留，但不作为员工端当前默认回答路径。
 - 未命中包括无候选、低于相似度阈值、MySQL 回查后无有效来源；未命中会返回固定提示并写入 `missed_questions`。
 - MVP 不做对话持久化，不创建 `conversation_threads`、`conversation_messages`、`rag_answer_sources`。
 - MVP 不持久化员工测验答题记录、分数、排行或统计。
@@ -41,7 +43,7 @@
 - `POST /api/admin/quiz-questions/{question_id}/enable` 与 `/disable`：启用或禁用测验题。
 - `GET /api/app/quiz`：员工获取当前权限内 5 到 10 道启用题。
 - `POST /api/app/quiz/submit`：员工提交答案并即时返回解析，不落库答题历史。
-- `POST /api/app/rag/ask`：员工提交 AI 问答，返回基于授权来源的回答或固定未命中提示。
+- `POST /api/app/rag/ask`：员工提交 AI 问答，默认返回 10 秒内极速来源摘要或固定未命中提示。
 - `GET /api/admin/missed-questions`：管理员查看未命中问题列表。
 - `POST /api/admin/missed-questions/{question_id}/mark-handled`：管理员将未命中问题标记为已处理。
 - `POST /api/admin/users`：管理员创建通用权限或完整权限员工账号。
@@ -113,7 +115,7 @@
 - `backend/app/services/content_service.py`：内容创建、更新、列表、发布、下线、历史版本、当前版本 chunk 和员工可见性查询规则。
 - `backend/app/services/quiz_service.py`：测验题创建、更新、启停、列表、员工抽题和响应字典转换规则；后台响应包含关联内容标题和更新时间。
 - `backend/app/services/rag_index_service.py`：内容切片、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
-- `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、候选召回、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
+- `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、Milvus 向量召回、MySQL 关键词召回、候选融合去重、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
 - `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
 - `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置、禁用和启用；拒绝普通账号管理入口操作管理员账号。
 
@@ -123,7 +125,7 @@
 
 ### 后端外部集成
 - `backend/app/integrations/__init__.py`：外部集成模块包标记。
-- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实 OpenAI-compatible HTTP 客户端、严格来源提示词、API Key 检查和超时/认证/响应错误标准化。
+- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实 OpenAI-compatible HTTP 客户端、严格来源提示词、API Key 检查和超时/认证/响应错误标准化；真实请求不读取系统代理环境，避免本地代理导致 HTTPS 链路抖动。
 - `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供按余弦相似度评分的内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
 
 ### 端到端测试后端

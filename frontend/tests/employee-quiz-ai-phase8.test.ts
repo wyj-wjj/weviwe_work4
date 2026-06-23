@@ -304,6 +304,18 @@ test('AI answer page renders answer, sources, updated time, copy button, and sou
   expect(getByRole('link', { name: '查看来源' })).toHaveAttribute('href', '/app/scripts/21')
 })
 
+test('AI answer page shows a reassuring loading message while retrieval is running', async () => {
+  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
+  mockedAskRag.mockReturnValue(request.promise)
+
+  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=速度测试')
+
+  expect(view.getByText('正在检索标准话术并生成简明回答，通常 10 秒内返回，请稍候。')).toBeInTheDocument()
+
+  request.resolve({ hit: true, answer: '快速回答', sources: [] })
+  await waitFor(() => expect(view.getByText('快速回答')).toBeInTheDocument())
+})
+
 test('AI answer page renders fixed miss copy and AI unavailable state', async () => {
   mockedAskRag.mockResolvedValueOnce({
     hit: false,
@@ -326,7 +338,9 @@ test('AI answer page renders fixed miss copy and AI unavailable state', async ()
 
   const unavailableView = await renderAppPage(AiAnswerPage, '/app/ask?question=down')
   await waitFor(() => {
-    expect(unavailableView.getByText('智能问答暂不可用，请稍后重试')).toBeInTheDocument()
+    expect(
+      unavailableView.getByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
+    ).toBeInTheDocument()
   })
 })
 
@@ -362,7 +376,9 @@ test('AI page ignores an older error after a newer question succeeds', async () 
   await oldRequest.promise.catch(() => undefined)
   await Promise.resolve()
 
-  expect(view.queryByText('智能问答暂不可用，请稍后重试')).not.toBeInTheDocument()
+  expect(
+    view.queryByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
+  ).not.toBeInTheDocument()
   expect(view.getByText('新回答')).toBeInTheDocument()
 })
 
@@ -432,7 +448,9 @@ test('employee AI form retries the same question after AI is unavailable', async
 
   const view = await renderAppPage(AiAnswerPage, '/app/ask?question=同一个问题')
   await waitFor(() => {
-    expect(view.getByText('智能问答暂不可用，请稍后重试')).toBeInTheDocument()
+    expect(
+      view.getByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
+    ).toBeInTheDocument()
   })
 
   await fireEvent.update(view.getByLabelText('AI 问题'), '  同一个问题  ')

@@ -87,6 +87,39 @@ def test_dashscope_http_client_calls_openai_compatible_embedding_and_chat() -> N
     assert "您好，请先说明您的核心需求。" in chat_request["payload"]["messages"][1]["content"]
 
 
+def test_dashscope_default_http_client_ignores_proxy_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+    captured_kwargs: list[dict] = []
+
+    class SpyHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            captured_kwargs.append(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, _url, *, headers=None, json=None) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr("app.integrations.dashscope.httpx.Client", SpyHttpClient)
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_http_timeout_seconds=8.0,
+    )
+    client = DashScopeHttpClient(settings)
+
+    response = client._send("/embeddings", {"model": "text-embedding-v4", "input": "test"})
+
+    assert response.status_code == 200
+    assert captured_kwargs == [{"timeout": 8.0, "trust_env": False}]
+
+
 @pytest.mark.parametrize(
     ("response", "expected_error"),
     [

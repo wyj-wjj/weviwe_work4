@@ -24,7 +24,7 @@ export async function askRag(
   const response = await apiClient.post<RagAnswerResponse>(
     '/app/rag/ask',
     { question },
-    { signal },
+    { signal, timeout: 10000 },
   )
   return response.data
 }

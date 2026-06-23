@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.deps import get_dashscope_client, get_milvus_client
+from app.core.config import Settings
 from app.domain.enums import ContentLevel, ContentType, MissedQuestionStatus
 from app.integrations.dashscope import FakeDashScopeClient, ProviderTimeoutError
 from app.integrations.milvus import FakeMilvusClient, MilvusSearchHit
@@ -11,7 +12,7 @@ from app.models.missed_question import MissedQuestion
 from app.models.user import User
 from app.schemas.content import ContentCreate
 from app.services.content_service import create_content, publish_content
-from app.services.rag_answer_service import MISSED_MESSAGE, answer_question, load_authorized_contexts
+from app.services.rag_answer_service import MISSED_MESSAGE, answer_question, load_authorized_contexts, retrieval_question
 from app.services.rag_index_service import stable_content_hash, sync_content_index
 
 
@@ -128,10 +129,152 @@ def test_rag_filters_mixed_milvus_candidates_and_uses_only_authorized_context(db
     assert dashscope.embedding_requests == ["How should I greet a customer?"]
     assert milvus.search_requests[-1].allowed_permission_levels == {"general"}
     assert [source["content_id"] for source in result["sources"]] == [general_content_id]
-    assert len(dashscope.chat_requests[-1]["contexts"]) == 1
-    context_text = dashscope.chat_requests[-1]["contexts"][0]["text"]
-    assert "Greet customers" in context_text
-    assert "Full permission pricing policy" not in context_text
+    assert dashscope.chat_requests == []
+    assert "Greet customers" in result["answer"]
+    assert "Full permission pricing policy" not in result["answer"]
+
+
+def test_rag_returns_fast_extractive_answer_without_waiting_for_chat_generation(db_session) -> None:
+    admin = make_user(db_session, username="fast-admin", account_type="admin", content_level="full")
+    general_user = make_user(db_session, username="fast-general", account_type="general_user", content_level="general")
+    milvus = FakeMilvusClient()
+    content_id, _ = publish_indexed_content(
+        db_session,
+        admin,
+        title="Fast Safety Source",
+        body="Fast approved safety answer should be returned from the authorized source.",
+        permission_level=ContentLevel.GENERAL,
+        milvus=milvus,
+    )
+    chunk = current_chunk(db_session, content_id=content_id)
+    milvus.search_results = [
+        MilvusSearchHit(
+            primary_key="fast-source",
+            score=0.92,
+            metadata={
+                "content_id": content_id,
+                "chunk_id": chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        )
+    ]
+    dashscope = FakeDashScopeClient(
+        embedding=[0.2, 0.2, 0.2],
+        chat_error=ProviderTimeoutError("chat should not block fast answer"),
+    )
+
+    result = answer_question(
+        db_session,
+        user=general_user,
+        question="How fast can this answer?",
+        dashscope_client=dashscope,
+        milvus_client=milvus,
+    )
+
+    assert result["hit"] is True
+    assert "Fast approved safety answer" in result["answer"]
+    assert result["sources"][0]["content_id"] == content_id
+    assert dashscope.chat_requests == []
+
+
+def test_environment_impact_short_question_expands_to_eia_terms() -> None:
+    expanded = retrieval_question("项目环境影响")
+
+    assert expanded.startswith("项目环境影响")
+    assert "储能项目环境影响评价" in expanded
+    assert "环评" in expanded
+
+
+def test_hybrid_retrieval_uses_keyword_and_vector_results_together(db_session) -> None:
+    admin = make_user(db_session, username="hybrid-admin", account_type="admin", content_level="full")
+    general_user = make_user(db_session, username="hybrid-general", account_type="general_user", content_level="general")
+    milvus = FakeMilvusClient()
+    vector_content_id, _ = publish_indexed_content(
+        db_session,
+        admin,
+        title="Vector Safety Source",
+        body="Vector-only safety context should still be considered when it passes similarity.",
+        permission_level=ContentLevel.GENERAL,
+        milvus=milvus,
+    )
+    keyword_content_id, _ = publish_indexed_content(
+        db_session,
+        admin,
+        title="储能消防配置基础话术",
+        body="消防配置包括烟感、温感、气体灭火和消防验收资料。",
+        permission_level=ContentLevel.GENERAL,
+        milvus=milvus,
+    )
+    vector_chunk = current_chunk(db_session, content_id=vector_content_id)
+    milvus.search_results = [
+        MilvusSearchHit(
+            primary_key="vector",
+            score=0.86,
+            metadata={
+                "content_id": vector_content_id,
+                "chunk_id": vector_chunk.id,
+                "permission_level": "general",
+                "is_active": True,
+            },
+        )
+    ]
+    dashscope = FakeDashScopeClient(embedding=[0.2, 0.2, 0.2])
+
+    result = answer_question(
+        db_session,
+        user=general_user,
+        question="消防相关话术",
+        dashscope_client=dashscope,
+        milvus_client=milvus,
+    )
+
+    source_ids = {source["content_id"] for source in result["sources"]}
+    assert result["hit"] is True
+    assert source_ids == {vector_content_id, keyword_content_id}
+    assert "Vector-only safety context" in result["answer"]
+    assert "消防配置包括烟感" in result["answer"]
+
+
+def test_hybrid_keyword_retrieval_respects_user_permissions(db_session) -> None:
+    admin = make_user(db_session, username="hybrid-permission-admin", account_type="admin", content_level="full")
+    general_user = make_user(
+        db_session,
+        username="hybrid-permission-general",
+        account_type="general_user",
+        content_level="general",
+    )
+    milvus = FakeMilvusClient(search_results=[])
+    publish_indexed_content(
+        db_session,
+        admin,
+        title="全量消防配置内部话术",
+        body="全量权限专属消防配置报价底线，不得泄露给通用权限员工。",
+        permission_level=ContentLevel.FULL,
+        milvus=milvus,
+    )
+    general_content_id, _ = publish_indexed_content(
+        db_session,
+        admin,
+        title="通用消防配置基础话术",
+        body="通用员工可见的消防配置说明。",
+        permission_level=ContentLevel.GENERAL,
+        milvus=milvus,
+    )
+
+    result = answer_question(
+        db_session,
+        user=general_user,
+        question="消防配置话术",
+        dashscope_client=FakeDashScopeClient(embedding=[0.2, 0.2, 0.2]),
+        milvus_client=milvus,
+        settings=Settings(rag_similarity_threshold=0.7),
+    )
+
+    assert result["hit"] is True
+    assert [source["content_id"] for source in result["sources"]] == [general_content_id]
+    assert "通用员工可见的消防配置说明" in result["answer"]
+    assert "全量权限专属消防配置报价底线" not in result["answer"]
 
 
 @pytest.mark.parametrize("question", ["电池能用多少次？", "这块电池能循环多少次？"])
@@ -172,7 +315,7 @@ def test_short_cycle_life_question_expands_only_embedding_text(db_session, quest
 
     assert result["hit"] is True
     assert dashscope.embedding_requests == [f"{question} 电池循环寿命 充放电循环次数"]
-    assert dashscope.chat_requests[-1]["question"] == question
+    assert dashscope.chat_requests == []
 
 
 def test_short_cycle_life_miss_records_original_question(db_session) -> None:
@@ -299,11 +442,9 @@ def test_rag_merges_same_content_chunks_into_one_context_and_source(db_session) 
 
     assert result["hit"] is True
     assert len(result["sources"]) == 1
-    assert len(dashscope.chat_requests[-1]["contexts"]) == 1
-    assert result["sources"][0] == dashscope.chat_requests[-1]["contexts"][0]["source"]
-    merged_text = dashscope.chat_requests[-1]["contexts"][0]["text"]
-    assert "First approved section." in merged_text
-    assert "Second approved section." in merged_text
+    assert dashscope.chat_requests == []
+    assert "First approved section." in result["answer"]
+    assert "Second approved section." in result["answer"]
     assert result["sources"][0]["chunk_id"] == first_chunk.id
 
 
@@ -394,12 +535,12 @@ def test_rag_api_covers_success_unauthorized_permission_filter_and_provider_erro
     assert success.status_code == 200
     assert success.json()["hit"] is True
     assert success.json()["sources"][0]["content_id"] == general_content_id
-    assert "API hidden full text" not in str(dashscope.chat_requests[-1])
+    assert dashscope.chat_requests == []
+    assert "API hidden full text" not in success.json()["answer"]
     assert unauthorized.status_code == 401
 
     app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient(
-        embedding=[0.3, 0.3, 0.3],
-        chat_error=ProviderTimeoutError("chat timed out"),
+        embedding_error=ProviderTimeoutError("embedding timed out"),
     )
     unavailable = client.post("/api/app/rag/ask", json={"question": "api question"}, headers=general_user_headers)
     assert unavailable.status_code == 503

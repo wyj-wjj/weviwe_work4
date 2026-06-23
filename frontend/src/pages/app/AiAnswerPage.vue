@@ -11,6 +11,7 @@ import { contentTypeLabel, formatDateTime, sourceDetailPath } from '../../utils/
 const route = useRoute()
 const answer = ref<RagAnswerResponse | null>(null)
 const state = ref<'loading' | 'ready' | 'empty' | 'ai-unavailable' | 'service'>('loading')
+const aiStateMessage = ref('')
 let requestSequence = 0
 let activeController: AbortController | null = null
 
@@ -37,6 +38,7 @@ watch(
     const controller = new AbortController()
     activeController = controller
     state.value = 'loading'
+    aiStateMessage.value = '正在检索标准话术并生成简明回答，通常 10 秒内返回，请稍候。'
     try {
       const result = await askRag(normalizedQuestion, controller.signal)
       if (sequence !== requestSequence || controller.signal.aborted) return
@@ -45,7 +47,17 @@ watch(
     } catch (error) {
       if (sequence !== requestSequence || controller.signal.aborted) return
       const apiError = error as { code?: string; status?: number }
-      state.value = apiError.code === 'ai_unavailable' || apiError.status === 503 ? 'ai-unavailable' : 'service'
+      if (
+        apiError.code === 'ai_unavailable' ||
+        apiError.code === 'request_timeout' ||
+        apiError.status === 503
+      ) {
+        aiStateMessage.value = 'AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'
+        state.value = 'ai-unavailable'
+      } else {
+        aiStateMessage.value = '页面没有卡住，可能是网络连接短暂波动。请稍后重试。'
+        state.value = 'service'
+      }
     } finally {
       if (activeController === controller) {
         activeController = null
@@ -68,10 +80,10 @@ onBeforeUnmount(() => {
       <h2>AI 问答结果</h2>
       <p v-if="question" class="ai-page__question">问题：{{ question }}</p>
 
-      <AppState v-if="state === 'loading'" state="loading" />
+      <AppState v-if="state === 'loading'" state="loading" :message="aiStateMessage" />
       <AppState v-else-if="state === 'empty'" state="empty" message="请输入要查询的问题" />
-      <AppState v-else-if="state === 'ai-unavailable'" state="ai-unavailable" />
-      <AppState v-else-if="state === 'service'" state="service" />
+      <AppState v-else-if="state === 'ai-unavailable'" state="ai-unavailable" :message="aiStateMessage" />
+      <AppState v-else-if="state === 'service'" state="service" :message="aiStateMessage" />
 
       <article v-else-if="answer" class="ai-answer">
         <section>

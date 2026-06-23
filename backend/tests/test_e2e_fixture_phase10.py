@@ -75,10 +75,14 @@ def test_phase10_fixture_prepares_accounts_content_quiz_and_deterministic_rag(
         headers=general_headers,
     )
     assert hit.status_code == 200
-    assert hit.json()["hit"] is True
-    assert hit.json()["answer"] == "E2E 回答：请使用已发布且当前账号可见的标准话术。"
-    assert hit.json()["sources"]
-    assert all("全量" not in source["title"] for source in hit.json()["sources"])
+    hit_payload = hit.json()
+    assert hit_payload["hit"] is True
+    assert hit_payload["usage"] == {"mode": "fast_extractive"}
+    assert "根据当前已发布且有权限的话术资料" in hit_payload["answer"]
+    assert "E2E 通用" in hit_payload["answer"]
+    assert "E2E 全量" not in hit_payload["answer"]
+    assert hit_payload["sources"]
+    assert all("全量" not in source["title"] for source in hit_payload["sources"])
 
     missed = client.post(
         "/api/app/rag/ask",

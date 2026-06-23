@@ -64,15 +64,22 @@ export function normalizeApiError(error: unknown): ApiError {
       status?: number
       data?: BackendErrorShape
     }
+    code?: string
     message?: string
   }
 
   const responseError = maybeError.response?.data?.error
+  const isTimeout =
+    maybeError.code === 'ECONNABORTED' ||
+    (maybeError.message?.toLowerCase().includes('timeout') ?? false)
 
   return {
     status: maybeError.response?.status ?? 0,
-    code: responseError?.code ?? 'network_error',
-    message: responseError?.message ?? maybeError.message ?? '服务暂不可用，请稍后重试',
+    code: responseError?.code ?? (isTimeout ? 'request_timeout' : 'network_error'),
+    message:
+      responseError?.message ??
+      (isTimeout ? '请求等待时间较长，请稍后重试。' : maybeError.message) ??
+      '服务暂不可用，请稍后重试',
     details: responseError?.details ?? null,
   }
 }

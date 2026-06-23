@@ -90,6 +90,10 @@ function isPending(item: AdminContent) {
   return Boolean(pendingActions[item.id])
 }
 
+function isPublishConfirmed(item: AdminContent) {
+  return item.status === 'published' && item.current_version_id !== null
+}
+
 function publishConfirmation(item: AdminContent) {
   const audience = item.permission_level === 'full' ? '管理员和完整权限员工' : '全部员工'
   const replaceText = item.current_version_id ? '本次发布会替换当前版本。' : '本次将生成首个正式版本。'
@@ -113,10 +117,14 @@ async function publish(item: AdminContent) {
   pendingActions[item.id] = 'publish'
   try {
     const result = await publishAdminContent(item.id)
-    message.value =
-      result.index_status === 'failed'
-        ? '内容已发布，但 AI 检索暂不可用'
-        : '内容发布成功'
+    if (!isPublishConfirmed(result)) {
+      message.value = '发布未完成，请刷新后确认内容状态'
+    } else {
+      message.value =
+        result.index_status === 'failed'
+          ? '内容已发布，但 AI 检索暂不可用'
+          : '内容发布成功'
+    }
     await loadContents()
   } catch {
     message.value = '发布失败，请稍后重试'

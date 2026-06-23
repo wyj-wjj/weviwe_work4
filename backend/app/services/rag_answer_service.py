@@ -1,12 +1,14 @@
 from typing import Any
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.domain.enums import ContentStatus
 from app.integrations.dashscope import normalize_provider_error
-from app.models.content import ContentChunk
+from app.integrations.milvus import MilvusSearchHit
+from app.models.content import Content, ContentChunk, ContentVersion
 from app.models.user import User
 from app.services.content_service import visible_levels_for
 from app.services.missed_question_service import record_missed_question
@@ -15,8 +17,46 @@ from app.services.missed_question_service import record_missed_question
 MISSED_MESSAGE = "当前没有有效标准口径，请联系管理员。"
 QUERY_EXPANSIONS = (
     (("电池能用多少次", "能循环多少次"), "电池循环寿命 充放电循环次数"),
+    (("项目环境影响", "环境影响", "环评"), "储能项目环境影响评价 环评 合规 噪声 危废 防火间距"),
 )
 RELATIVE_SCORE_WINDOW = 0.12
+FAST_ANSWER_MAX_CONTEXTS = 3
+FAST_ANSWER_MAX_CHARS_PER_SOURCE = 360
+KEYWORD_SEARCH_BASE_SCORE = 0.68
+KEYWORD_SEARCH_MAX_SCORE = 0.95
+KEYWORD_SEARCH_FETCH_MULTIPLIER = 4
+GENERIC_QUERY_PARTS = (
+    "相关",
+    "话术",
+    "标准",
+    "内容",
+    "资料",
+    "口径",
+    "怎么",
+    "如何",
+    "什么",
+    "哪些",
+    "要求",
+    "客户",
+    "项目",
+    "储能",
+    "一下",
+    "请问",
+    "？",
+    "?",
+)
+KEYWORD_EXPANSIONS = (
+    (("消防", "灭火", "烟感", "温感"), ("消防", "消防配置", "消防验收", "消防安全", "烟感", "温感", "气体灭火", "消防报告", "保险")),
+    (("并网",), ("并网", "并网接入", "接入流程", "并网验收", "电网公司", "并网周期")),
+    (("环评", "环境影响"), ("环评", "环境影响", "环境影响评价", "合规", "噪声", "危废", "防火间距")),
+    (("技术参数", "电芯", "PCS", "BMS"), ("技术参数", "电芯", "LFP", "磷酸铁锂", "钠离子", "液流电池", "PCS", "BMS")),
+    (("投资", "回报", "回收周期", "收益"), ("投资回报", "回收周期", "收益", "峰谷价差", "投资收益")),
+    (("电价", "峰谷", "电费"), ("电价", "分时电价", "峰谷", "电费账单")),
+    (("补贴",), ("补贴", "申报", "额度", "政策")),
+    (("巡检", "故障", "应急"), ("巡检", "故障", "应急", "BMS通讯", "PCS过温")),
+    (("合同", "质保", "条款"), ("合同", "质保", "条款", "谈判")),
+    (("施工", "安装", "进场", "运输"), ("施工", "安装", "进场", "运输", "现场准备")),
+)
 
 
 def retrieval_question(question: str) -> str:
@@ -25,6 +65,124 @@ def retrieval_question(question: str) -> str:
         if any(phrase in normalized for phrase in phrases):
             return f"{normalized} {expansion}"
     return normalized
+
+
+def keyword_terms_for_question(question: str) -> list[str]:
+    normalized = question.strip()
+    terms: list[str] = []
+    for triggers, expansion_terms in KEYWORD_EXPANSIONS:
+        if any(trigger in normalized for trigger in triggers):
+            terms.extend(expansion_terms)
+
+    cleaned = normalized
+    for part in GENERIC_QUERY_PARTS:
+        cleaned = cleaned.replace(part, " ")
+    terms.extend(term for term in cleaned.split() if len(term) >= 2)
+
+    unique_terms: list[str] = []
+    seen: set[str] = set()
+    for term in sorted((term.strip() for term in terms), key=len, reverse=True):
+        if term and term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    return unique_terms
+
+
+def keyword_match_score(chunk: ContentChunk, *, terms: list[str], question: str) -> float:
+    title = chunk.version.title or ""
+    category = chunk.content.category or ""
+    text = chunk.chunk_text or ""
+    matched_terms = 0
+    weighted_score = 0.0
+    for term in terms:
+        term_score = 0.0
+        if term in title:
+            term_score += 0.24
+        if category and term in category:
+            term_score += 0.16
+        if term in text:
+            term_score += 0.12
+        if term_score:
+            matched_terms += 1
+            weighted_score += min(term_score, 0.32)
+    if matched_terms == 0:
+        return 0.0
+
+    if "话术" in question and chunk.content.content_type in {"base_script", "standard_script"}:
+        weighted_score += 0.08
+    if any(len(term) >= 4 and (term in title or term in text) for term in terms):
+        weighted_score += 0.04
+    return min(KEYWORD_SEARCH_MAX_SCORE, KEYWORD_SEARCH_BASE_SCORE + weighted_score + matched_terms * 0.02)
+
+
+def keyword_search_hits(
+    db: Session,
+    *,
+    question: str,
+    user: User,
+    top_k: int,
+) -> list[MilvusSearchHit]:
+    terms = keyword_terms_for_question(question)
+    if not terms:
+        return []
+    allowed_levels = visible_levels_for(user)
+    term_conditions = []
+    for term in terms:
+        term_conditions.extend(
+            [
+                ContentVersion.title.contains(term),
+                Content.category.contains(term),
+                ContentChunk.chunk_text.contains(term),
+            ]
+        )
+    stmt = (
+        select(ContentChunk)
+        .join(Content, ContentChunk.content_id == Content.id)
+        .join(ContentVersion, ContentChunk.version_id == ContentVersion.id)
+        .where(Content.status == ContentStatus.PUBLISHED.value)
+        .where(Content.current_version_id == ContentChunk.version_id)
+        .where(Content.permission_level.in_(allowed_levels))
+        .where(ContentChunk.permission_level.in_(allowed_levels))
+        .where(ContentChunk.is_active.is_(True))
+        .where(or_(*term_conditions))
+        .order_by(ContentChunk.id.asc())
+        .limit(max(top_k * KEYWORD_SEARCH_FETCH_MULTIPLIER, top_k))
+    )
+    scored_hits: list[MilvusSearchHit] = []
+    for chunk in db.scalars(stmt).all():
+        score = keyword_match_score(chunk, terms=terms, question=question)
+        if score <= 0:
+            continue
+        scored_hits.append(
+            MilvusSearchHit(
+                primary_key=f"keyword-{chunk.id}",
+                score=score,
+                metadata={
+                    "content_id": chunk.content_id,
+                    "version_id": chunk.version_id,
+                    "chunk_id": chunk.id,
+                    "permission_level": chunk.permission_level,
+                    "is_active": chunk.is_active,
+                    "retrieval_path": "keyword",
+                },
+            )
+        )
+    return sorted(scored_hits, key=lambda hit: hit.score, reverse=True)[:top_k]
+
+
+def merge_retrieval_hits(*hit_groups: list[MilvusSearchHit]) -> list[MilvusSearchHit]:
+    hits_by_chunk_id: dict[int, MilvusSearchHit] = {}
+    passthrough_hits: list[MilvusSearchHit] = []
+    for hits in hit_groups:
+        for hit in hits:
+            chunk_id = hit.metadata.get("chunk_id")
+            if not isinstance(chunk_id, int):
+                passthrough_hits.append(hit)
+                continue
+            existing = hits_by_chunk_id.get(chunk_id)
+            if existing is None or hit.score > existing.score:
+                hits_by_chunk_id[chunk_id] = hit
+    return sorted([*hits_by_chunk_id.values(), *passthrough_hits], key=lambda hit: hit.score, reverse=True)
 
 
 def provider_unavailable(exc: Exception) -> AppError:
@@ -102,6 +260,33 @@ def load_authorized_contexts(
     return contexts
 
 
+def compact_source_text(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    useful_lines = [
+        line
+        for line in lines
+        if not line.startswith(("标题：", "分类："))
+    ]
+    compact = "；".join(useful_lines[:6])
+    if len(compact) > FAST_ANSWER_MAX_CHARS_PER_SOURCE:
+        return f"{compact[:FAST_ANSWER_MAX_CHARS_PER_SOURCE].rstrip()}……"
+    return compact
+
+
+def build_fast_answer(*, contexts: list[dict[str, Any]]) -> str:
+    bullets: list[str] = []
+    for index, context in enumerate(contexts[:FAST_ANSWER_MAX_CONTEXTS], start=1):
+        source = context.get("source") if isinstance(context.get("source"), dict) else {}
+        title = source.get("title") or f"来源 {index}"
+        text = context.get("text") or ""
+        compact_text = compact_source_text(str(text))
+        if compact_text:
+            bullets.append(f"{index}. {title}：{compact_text}")
+    if not bullets:
+        return "已命中当前权限内的标准话术，但来源正文为空，请联系管理员核对内容。"
+    return "根据当前已发布且有权限的话术资料，快速整理如下：\n" + "\n".join(bullets)
+
+
 def answer_question(
     db: Session,
     *,
@@ -114,7 +299,7 @@ def answer_question(
     resolved_settings = settings or Settings()
     try:
         question_embedding = dashscope_client.embed_text(retrieval_question(question))
-        hits = milvus_client.search(
+        vector_hits = milvus_client.search(
             resolved_settings.milvus_collection_name,
             query_vector=question_embedding.vector,
             allowed_permission_levels=visible_levels_for(user),
@@ -123,6 +308,13 @@ def answer_question(
     except Exception as exc:
         raise provider_unavailable(exc) from exc
 
+    keyword_hits = keyword_search_hits(
+        db,
+        question=question,
+        user=user,
+        top_k=resolved_settings.rag_top_k,
+    )
+    hits = merge_retrieval_hits(vector_hits, keyword_hits)
     contexts = load_authorized_contexts(
         db,
         hits=hits,
@@ -133,21 +325,9 @@ def answer_question(
         record_missed_question(db, question=question, user=user)
         return {"hit": False, "answer": MISSED_MESSAGE, "sources": []}
 
-    chat_contexts = [
-        {
-            "text": context["text"],
-            "source": context["source"],
-        }
-        for context in contexts
-    ]
-    try:
-        answer = dashscope_client.generate_answer(question=question, contexts=chat_contexts)
-    except Exception as exc:
-        raise provider_unavailable(exc) from exc
-
     return {
         "hit": True,
-        "answer": answer.answer_text,
+        "answer": build_fast_answer(contexts=contexts),
         "sources": [context["source"] for context in contexts],
-        "usage": answer.usage,
+        "usage": {"mode": "fast_extractive"},
     }

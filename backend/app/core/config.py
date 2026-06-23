@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_chat_model: str = "qwen-plus"
     dashscope_embedding_model: str = "text-embedding-v4"
+    dashscope_http_timeout_seconds: float = 8.0
     rag_similarity_threshold: float = 0.7
     rag_top_k: int = 5
     jwt_secret_key: str = "test-only-insecure-secret-with-32-plus-chars"
