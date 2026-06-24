@@ -5,7 +5,7 @@ import { RouterLink } from 'vue-router'
 import { listMustReads, type MustReadItem } from '../../api/content'
 import AppState from '../../components/AppState.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
-import { formatDateTime, permissionLabel } from '../../utils/format'
+import { formatDateTime, permissionLabel, updateLevelLabel } from '../../utils/format'
 
 const items = ref<MustReadItem[]>([])
 const state = ref<'loading' | 'ready' | 'service'>('loading')
@@ -47,6 +47,7 @@ onMounted(async () => {
           <strong>{{ item.title }}</strong>
           <span>发布时间：{{ formatDateTime(item.published_at) }}</span>
           <span>生效时间：{{ formatDateTime(item.effective_at) }}</span>
+          <span>更新级别：{{ updateLevelLabel(item.update_level) }}</span>
           <em>{{ permissionLabel(item.permission_level) }}</em>
         </RouterLink>
       </div>

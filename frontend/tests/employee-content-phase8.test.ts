@@ -63,6 +63,7 @@ test('must-read list renders title, published time, effective time, and permissi
         published_at: '2026-06-17T09:00:00',
         effective_at: '2026-06-18T00:00:00',
         permission_level: 'general',
+        update_level: 'medium',
         update_body: '新版介绍口径',
         adjustment_points: ['突出稳定性'],
       },
@@ -76,6 +77,7 @@ test('must-read list renders title, published time, effective time, and permissi
   })
   expect(getByText('发布时间：2026-06-17 09:00')).toBeInTheDocument()
   expect(getByText('生效时间：2026-06-18 00:00')).toBeInTheDocument()
+  expect(getByText('更新级别：中更新')).toBeInTheDocument()
   expect(getByText('通用级')).toBeInTheDocument()
 })
 
@@ -96,6 +98,7 @@ test('must-read detail renders body, adjustment points, dates, and permission le
     published_at: '2026-06-17T09:00:00',
     effective_at: '2026-06-18T00:00:00',
     permission_level: 'general',
+    update_level: 'major',
     update_body: '请使用新版产品介绍口径。',
     adjustment_points: ['新增合规提示', '强调服务边界'],
   })
@@ -110,6 +113,7 @@ test('must-read detail renders body, adjustment points, dates, and permission le
   expect(getByText('强调服务边界')).toBeInTheDocument()
   expect(getByText('发布时间：2026-06-17 09:00')).toBeInTheDocument()
   expect(getByText('生效时间：2026-06-18 00:00')).toBeInTheDocument()
+  expect(getByText('更新级别：大更新')).toBeInTheDocument()
   expect(getByText('通用级')).toBeInTheDocument()
 })
 
@@ -139,6 +143,7 @@ test('scripts page renders base scripts, standard scripts, and filters by catego
           title: '基础开场白',
           category: '开户',
           permission_level: 'general',
+          update_level: 'minor',
           updated_at: '2026-06-17T10:00:00',
           summary_points: ['先确认客户身份', '说明服务范围'],
         },
@@ -150,6 +155,7 @@ test('scripts page renders base scripts, standard scripts, and filters by catego
           title: '风险提示',
           category: '风控',
           permission_level: 'general',
+          update_level: 'medium',
           updated_at: '2026-06-17T11:00:00',
           scene: '高风险咨询',
           recommended_speech_summary: '建议先说明风险等级和适用边界。',
@@ -165,6 +171,7 @@ test('scripts page renders base scripts, standard scripts, and filters by catego
           title: '风险提示',
           category: '风控',
           permission_level: 'general',
+          update_level: 'medium',
           updated_at: '2026-06-17T11:00:00',
           scene: '高风险咨询',
           recommended_speech_summary: '建议先说明风险等级和适用边界。',
@@ -180,6 +187,7 @@ test('scripts page renders base scripts, standard scripts, and filters by catego
   expect(getByText('先确认客户身份')).toBeInTheDocument()
   expect(getByText('说明服务范围')).toBeInTheDocument()
   expect(getByText('更新时间：2026-06-17 10:00')).toBeInTheDocument()
+  expect(getByText('更新级别：小更新')).toBeInTheDocument()
   expect(getByText('高风险咨询')).toBeInTheDocument()
   expect(getByText('建议先说明风险等级和适用边界。')).toBeInTheDocument()
 
@@ -204,6 +212,7 @@ test('standard script detail renders speech fields and copies rendered text', as
     content_type: 'standard_script',
     category: '风控',
     permission_level: 'general',
+    update_level: 'medium',
     scene: '高风险咨询',
     recommended_speech: '建议先说明风险等级。',
     forbidden_speech: '不能承诺收益。',
@@ -221,6 +230,7 @@ test('standard script detail renders speech fields and copies rendered text', as
   expect(getByText('不能承诺收益。')).toBeInTheDocument()
   expect(getByText('必要时转交主管。')).toBeInTheDocument()
   expect(getByText('更新时间：2026-06-17 11:00')).toBeInTheDocument()
+  expect(getByText('更新级别：中更新')).toBeInTheDocument()
 
   await fireEvent.click(getByRole('button', { name: '复制推荐说法' }))
   expect(writeText).toHaveBeenCalledWith('建议先说明风险等级。')

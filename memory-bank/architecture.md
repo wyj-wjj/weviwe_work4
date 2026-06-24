@@ -4,7 +4,7 @@
 - 前端是一个 Vue 3 + TypeScript + Vite SPA，承载登录页、员工端 `/app` 和后台端 `/admin`，并通过 Pinia 保存会话状态、通过 Vue Router 守卫控制前后台入口。
 - 后端是一个 FastAPI 单体服务，承载 REST API、认证授权、内容管理、员工内容读取、测验管理、RAG 索引和 AI 问答编排。
 - MySQL 是唯一权威业务数据源；自动化测试使用 SQLite 临时库验证模型、迁移和 API 行为，不改变生产目标。
-- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status` -> `0004_publish_revision_permission`。
+- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status` -> `0004_publish_revision_permission` -> `0005_quiz_update_policy` -> `0006_quiz_ai_generation_sets`。
 - Milvus 通过后端集成边界访问；自动化测试使用内存假客户端，真实模式使用 PyMilvus `MilvusClient` 写入本地 Milvus，Milvus 只作为向量索引，不保存权威正文。
 - DashScope 只能由后端调用；真实模式通过 OpenAI-compatible `/embeddings` 和 `/chat/completions` 调用，自动化测试使用假客户端或 `httpx.MockTransport`，不默认调用真实模型服务。
 
@@ -41,6 +41,9 @@
 - `GET /api/app/scripts` 与 `GET /api/app/scripts/{content_id}`：员工基础话术、标准化话术列表和详情。
 - `POST /api/admin/quiz-questions`、`GET /api/admin/quiz-questions`、`PATCH /api/admin/quiz-questions/{question_id}`：后台测验题管理。
 - `POST /api/admin/quiz-questions/{question_id}/enable` 与 `/disable`：启用或禁用测验题。
+- `GET /api/admin/quiz-generation-batches`：管理员查看 AI 候选题生成批次，追踪来源版本、模型、提示词版本、生成数量和失败原因。
+- `GET /api/admin/quiz-sets`：管理员查看大更新专题测验包及其题目数量。
+- `POST /api/admin/contents/{content_id}/versions/{version_id}/generate-quiz`：管理员在历史版本页手动补触发候选题生成；大更新版本可同步写入专题测验包。
 - `GET /api/app/quiz`：员工获取当前权限内 5 到 10 道启用题。
 - `POST /api/app/quiz/submit`：员工提交答案并即时返回解析，不落库答题历史。
 - `POST /api/app/rag/ask`：员工提交 AI 问答，默认返回 10 秒内极速来源摘要或固定未命中提示。
@@ -83,6 +86,8 @@
 - `backend/alembic/versions/0002_add_content_draft_fields.py`：为 `contents` 增加 `draft_summary`、`draft_body`、`draft_payload`，让草稿与已发布版本快照解耦。
 - `backend/alembic/versions/0003_add_content_index_status.py`：为 `contents` 增加 `index_status`，持久化未同步、已同步和同步失败状态。
 - `backend/alembic/versions/0004_add_publish_revision_and_version_permission.py`：为内容发布增加草稿修订号、已发布修订号和版本权限快照，支持发布幂等与历史权限追溯。
+- `backend/alembic/versions/0005_quiz_update_policy.py`：为内容版本增加更新级别、变更摘要和题库动作，为测验题增加关联版本、来源、审核状态和待复核标记。
+- `backend/alembic/versions/0006_quiz_ai_generation_sets.py`：新增 AI 候选题生成批次、专题测验包和专题包题目关联表，并为测验题增加生成批次、过期时间和抽题优先级字段。
 
 ### 后端领域与模型
 - `backend/app/domain/__init__.py`：领域模块包标记。
@@ -91,7 +96,7 @@
 - `backend/app/models/base.py`：SQLAlchemy declarative base 和通用时间戳 mixin。
 - `backend/app/models/user.py`：`users` 模型，包含账号身份、密码哈希、内容权限和启用状态。
 - `backend/app/models/content.py`：`contents`、`content_versions`、`content_chunks`、`vector_index_records` 模型；`contents` 保存当前草稿和索引状态，`content_versions` 保存发布快照，`content_chunks` 为 RAG 索引候选，`vector_index_records` 记录 Milvus 索引元数据。
-- `backend/app/models/quiz.py`：`quiz_questions` 模型；不包含答题记录表。
+- `backend/app/models/quiz.py`：`quiz_questions`、`quiz_generation_batches`、`quiz_sets`、`quiz_question_set_items` 模型；题目可追踪生成批次、过期时间和抽题优先级，专题包只组织题目，不记录员工完成情况；仍不包含答题记录表。
 - `backend/app/models/missed_question.py`：`missed_questions` 模型，保留提问时账号类型和内容权限快照。
 
 ### 后端 API、Schema 与服务
@@ -263,8 +268,8 @@
 - 本次 Browser 烟测仍不是阶段 10 的正式 Playwright 端到端测试，后续需保留确定性夹具和可重复执行的自动化流程。
 
 ## 当前验证基线
-- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `71 passed`。
-- 前端单测：`corepack.cmd pnpm test:unit`，当前 `43 passed`。
+- 后端：`..\.venv\Scripts\python.exe -m pytest`，当前 `129 passed`。
+- 前端单测：`corepack.cmd pnpm test:unit`，当前 `63 passed`。
 - 前端构建：`corepack.cmd pnpm build`，当前构建成功。
 - Playwright：`corepack.cmd pnpm test:e2e`，当前 `5 passed`。
 
@@ -287,3 +292,33 @@
 - 前端生产部署是静态 `dist`，FastAPI 监听 `127.0.0.1` 并由 Nginx/宝塔代理 `/api`；SQLAlchemy 只是 ORM，MySQL 仍是唯一业务数据库。
 - 真实手测应为 `text-embedding-v4` 使用新 Milvus collection，避免与旧 3 维假向量 collection 冲突。
 - 2026-06-18 已完成真实浏览器链路：管理员前端创建账号和内容，FastAPI 写入 MySQL，发布后 `text-embedding-v4` 生成 1024 维向量并写入 `weview_content_chunks_codex_real_v4_20260618`，通用员工问答由 Milvus 命中、MySQL 回查和 `qwen-plus` 生成带来源回答；无关问题写入后台未命中列表。
+## 2026-06-23 测验题与内容更新联动补充
+
+- Alembic 迁移链已扩展到 `0005_quiz_update_policy`，在不新增员工答题记录表的前提下完成第一阶段题库稳态增强。
+- `content_versions` 现在同时保存 `version_no` 与 `update_level`：`version_no` 表示第几次发布，`update_level` 表示本次发布影响级别，二者互不替代。新增字段包括 `update_level`、`change_summary`、`quiz_action`、`ai_suggested_update_level`、`ai_suggestion_reason`。
+- `quiz_questions` 现在支持绑定发布版本与审核流转，新增 `related_version_id`、`source_type`、`review_status`、`needs_review`、`review_reason`。人工题默认 `source_type=manual`、`review_status=approved`，AI 生成题后续必须保持“候选/待审核/禁用”边界，不得直接进入员工端。
+- 内容发布接口 `POST /api/admin/contents/{content_id}/publish` 保持老调用兼容，同时可接收发布参数：`update_level`、`change_summary`、`quiz_action` 与 AI 建议字段。若未显式传 `quiz_action`，后端按更新级别推导：`minor -> none`，`medium -> review_related`，`major -> generate_pack`。
+- 内容发布为 `medium` 或 `major` 时，后端会把 `related_content_id` 指向该内容的既有题目标记为 `needs_review=true`，并写入 `review_reason`。`minor` 不强制影响题库。
+- 员工端抽题规则已收紧为：仅返回 `status=enabled`、`review_status=approved`、`needs_review=false`、当前账号权限内的题；如果题目绑定了内容，则关联内容必须仍为 `published`、有当前版本且当前用户可见。内容下线或权限变更后，绑定题不会绕过内容权限暴露给员工。
+- 后台内容列表发布时会要求管理员输入本次更新级别与变更摘要；后台历史版本页展示更新级别、题库动作和变更摘要；后台测验题管理页可查看和编辑关联版本、来源、审核状态、待复核标记与复核原因。
+- 当前版本的更新级别已作为可见业务信息暴露给管理员和员工：后台内容列表在版本右侧展示“更新级别”，员工端最新必读、标准话术列表与详情页展示“小更新/中更新/大更新”，AI 问答来源卡片也展示来源版本的更新级别，避免使用者只看到内容而不知道本次更新影响范围。
+
+## 2026-06-23 测验题第二/三阶段补充
+
+- Alembic 迁移链已继续扩展到 `0006_quiz_ai_generation_sets`：`quiz_generation_batches` 记录 AI 候选题生成批次，`quiz_sets` 与 `quiz_question_set_items` 组织大更新专题测验包；`quiz_questions` 增加 `generation_batch_id`、`expires_at`、`priority`。
+- 内容发布接口不再同步调用 DashScope 生成候选题，避免大更新发布被模型超时拖成前端“假失败”。发布响应会返回 `quiz_generation_status`：`not_required`、`pending`、`completed` 或 `failed`；其中 `pending` 表示内容已发布且题库候选题可在历史版本页手动生成。
+- AI 生成题默认 `source_type=ai_generated`、`review_status=pending_review`、`status=disabled`，并绑定来源内容、来源版本和生成批次。管理员必须在测验题管理页审核通过并启用后，员工端才可能抽到该题。
+- `medium` 更新默认请求生成 3 道候选题，优先级为 50；`major` 更新默认请求生成 5 道候选题，优先级为 100，并自动创建或复用该版本的大更新专题测验包。
+- 员工端抽题仍不记录答题历史，但过滤条件进一步收紧为：启用、审核通过、无需复核、未过期、当前用户权限内、绑定内容仍发布且可见；排序按 `priority desc, id asc`，使已审核启用的大更新专题题优先进入本次 5-10 道巩固测试。
+- 后台新增 `GET /api/admin/quiz-generation-batches`、`GET /api/admin/quiz-sets` 和 `POST /api/admin/contents/{content_id}/versions/{version_id}/generate-quiz`。前端历史版本页提供“生成候选题”入口，测验题管理页展示专题包、生成批次、过期时间和抽题优先级。
+- 后台测验题新增显式审核动作：`POST /api/admin/quiz-questions/{question_id}/approve` 会同时将题目置为“审核通过、启用、无需复核”，`POST /api/admin/quiz-questions/{question_id}/reject` 会将题目置为“已拒绝、禁用”。前端对未审核题不再展示普通“启用”，而展示“审核通过并启用 / 驳回”，避免出现“启用但仍待审核”的误导性操作。
+- 内容下线时会同步将关联专题测验包置为 `inactive`。员工端此前已按关联内容发布状态过滤题目；该联动用于让后台专题包状态与实际员工端可见性一致，避免管理员误以为下线内容的专题包仍在员工端生效。
+
+## 2026-06-24 测验题来源失效联动补充
+
+- 测验题后台响应现在包含 `source_valid` 与 `source_invalid_reason`，用于展示题目绑定来源是否仍可上线。来源失效原因包括源内容不存在、源内容已下线、源内容未发布、源内容无当前版本、源版本已失效和专题包已停用。
+- 后端将“来源有效性”作为审核通过和启用题目的硬约束：`approve` 与 `enable` 操作会校验关联内容仍为已发布、关联版本仍是内容当前版本、关联专题包未停用；校验失败返回 `quiz_source_invalid`，避免前端状态滞后或多人并发操作导致旧题上线。
+- 员工端抽题与提交校验进一步收紧：如果题目绑定了 `related_version_id`，该版本必须等于关联内容的 `current_version_id`。因此内容重新发布后，旧版本题即使仍是已审核/启用，也不会进入员工巩固测试或提交解析。
+- 内容下线时不再只停用专题包，还会同步处理关联题目：草稿或待审核题自动置为 `rejected + disabled`，已通过题置为 `disabled + needs_review`，并写入“源内容已下线”的复核/驳回原因。
+- 内容重新发布新版本时，旧版本专题包会自动置为 `inactive`；绑定旧版本的草稿或待审核题自动驳回并禁用，已通过旧题禁用并标记待复核，复核原因记录旧版本已被新版本替代。
+- 后台测验题管理页新增“来源状态”列。来源失效题不再显示“审核通过并启用”或普通“启用”操作，只保留安全的“驳回”清理动作；审核、驳回、启用和禁用按钮增加行级处理中状态，减少连续点击和列表刷新造成的交互漂移。

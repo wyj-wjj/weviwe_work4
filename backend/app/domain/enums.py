@@ -35,6 +35,42 @@ class QuestionStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class UpdateLevel(StrEnum):
+    MINOR = "minor"
+    MEDIUM = "medium"
+    MAJOR = "major"
+
+
+class QuizAction(StrEnum):
+    NONE = "none"
+    REVIEW_RELATED = "review_related"
+    GENERATE_PACK = "generate_pack"
+
+
+class QuizSourceType(StrEnum):
+    MANUAL = "manual"
+    AI_GENERATED = "ai_generated"
+    AI_ASSISTED = "ai_assisted"
+
+
+class QuizReviewStatus(StrEnum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class QuizGenerationStatus(StrEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class QuizSetStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class MissedQuestionStatus(StrEnum):
     NEW = "new"
     HANDLED = "handled"

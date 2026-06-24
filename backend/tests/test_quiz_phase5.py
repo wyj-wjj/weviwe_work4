@@ -281,8 +281,8 @@ def test_employee_quiz_projects_only_visible_published_related_content(
         (base_id, "base_script"),
         (standard_id, "standard_script"),
         (must_read_id, "must_read"),
-        (offline_id, None),
-        (full_id, None),
+        (offline_id, "excluded"),
+        (full_id, "excluded"),
         (None, None),
     ]
     question_ids = []
@@ -299,7 +299,15 @@ def test_employee_quiz_projects_only_visible_published_related_content(
     assert response.status_code == 200
     items_by_id = {item["id"]: item for item in response.json()["items"]}
 
+    visible_question_ids = []
+    excluded_question_ids = []
     for question_id, (related_content_id, expected_type) in zip(question_ids, relation_cases, strict=True):
+        if expected_type == "excluded":
+            excluded_question_ids.append(question_id)
+            assert question_id not in items_by_id
+            continue
+
+        visible_question_ids.append(question_id)
         item = items_by_id[question_id]
         assert item["related_content_type"] == expected_type
         if expected_type is None:
@@ -316,17 +324,30 @@ def test_employee_quiz_projects_only_visible_published_related_content(
         json={
             "answers": [
                 {"question_id": question_id, "selected_answer": "确认需求"}
-                for question_id in question_ids
+                for question_id in visible_question_ids
             ]
         },
         headers=general_user_headers,
     )
     assert submitted.status_code == 200
     results_by_id = {item["question_id"]: item for item in submitted.json()["results"]}
-    for question_id, (related_content_id, expected_type) in zip(question_ids, relation_cases, strict=True):
+    visible_cases = [
+        (question_id, related_content_id, expected_type)
+        for question_id, (related_content_id, expected_type) in zip(question_ids, relation_cases, strict=True)
+        if expected_type != "excluded"
+    ]
+    for question_id, related_content_id, expected_type in visible_cases:
         result = results_by_id[question_id]
         assert result["related_content_type"] == expected_type
         assert result["related_content_id"] == (related_content_id if expected_type else None)
+
+    for question_id in excluded_question_ids:
+        rejected = client.post(
+            "/api/app/quiz/submit",
+            json={"answers": [{"question_id": question_id, "selected_answer": "确认需求"}]},
+            headers=general_user_headers,
+        )
+        assert rejected.status_code == 404
 
 
 def test_quiz_submit_returns_explanations_without_persisting_attempts(client, admin_headers, general_user_headers, db_session):

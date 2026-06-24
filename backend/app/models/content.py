@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus
+from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
 from app.models.base import Base, TimestampMixin, utc_now
 
 
@@ -62,7 +62,17 @@ class Content(TimestampMixin, Base):
 
 class ContentVersion(Base):
     __tablename__ = "content_versions"
-    __table_args__ = (UniqueConstraint("content_id", "version_no", name="uq_content_versions_content_version_no"),)
+    __table_args__ = (
+        UniqueConstraint("content_id", "version_no", name="uq_content_versions_content_version_no"),
+        CheckConstraint(
+            f"update_level in {tuple(item.value for item in UpdateLevel)}",
+            name="ck_content_versions_update_level",
+        ),
+        CheckConstraint(
+            f"quiz_action in {tuple(item.value for item in QuizAction)}",
+            name="ck_content_versions_quiz_action",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     content_id: Mapped[int] = mapped_column(ForeignKey("contents.id"), nullable=False, index=True)
@@ -72,6 +82,21 @@ class ContentVersion(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     structured_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     permission_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    update_level: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=UpdateLevel.MAJOR.value,
+        server_default=UpdateLevel.MAJOR.value,
+    )
+    change_summary: Mapped[str | None] = mapped_column(Text)
+    quiz_action: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=QuizAction.NONE.value,
+        server_default=QuizAction.NONE.value,
+    )
+    ai_suggested_update_level: Mapped[str | None] = mapped_column(String(32))
+    ai_suggestion_reason: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

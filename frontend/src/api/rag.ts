@@ -7,6 +7,7 @@ export interface RagSource {
   title: string
   content_type: string
   updated_at: string
+  update_level: 'minor' | 'medium' | 'major'
   relevance_score: number
 }
 

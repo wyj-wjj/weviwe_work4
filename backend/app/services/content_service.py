@@ -5,7 +5,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus
+from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
 from app.models.content import Content, ContentChunk, ContentVersion
 from app.models.user import User
 
@@ -16,6 +16,7 @@ def not_found(message: str = "资源不存在。") -> AppError:
 
 def content_to_admin_dict(content: Content) -> dict[str, Any]:
     current_version_no = content.current_version.version_no if content.current_version else None
+    current_update_level = content.current_version.update_level if content.current_version else None
     return {
         "id": content.id,
         "content_type": content.content_type,
@@ -25,6 +26,7 @@ def content_to_admin_dict(content: Content) -> dict[str, Any]:
         "status": content.status,
         "current_version_id": content.current_version_id,
         "current_version_no": current_version_no,
+        "current_update_level": current_update_level,
         "index_status": content.index_status,
         "summary": content.draft_summary,
         "body": content.draft_body,
@@ -120,7 +122,66 @@ def next_version_no(content: Content) -> int:
     return max(version.version_no for version in content.versions) + 1
 
 
-def publish_content(db: Session, *, content_id: int) -> ContentVersion:
+def enum_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def default_quiz_action_for(update_level: str) -> str:
+    if update_level == UpdateLevel.MINOR.value:
+        return QuizAction.NONE.value
+    if update_level == UpdateLevel.MEDIUM.value:
+        return QuizAction.REVIEW_RELATED.value
+    return QuizAction.GENERATE_PACK.value
+
+
+def mark_related_quiz_questions_for_review(
+    db: Session,
+    *,
+    content: Content,
+    update_level: str,
+    version: ContentVersion,
+) -> None:
+    from app.models.quiz import QuizQuestion
+    from app.domain.enums import QuestionStatus, QuizReviewStatus
+    from app.services.quiz_service import mark_question_source_invalid
+
+    should_mark_current_review = update_level in {UpdateLevel.MEDIUM.value, UpdateLevel.MAJOR.value}
+    review_reason = f"{update_level} update published as v{version.version_no}; related quiz question requires review."
+    stale_reason = f"源版本已被 v{version.version_no} 替代，旧版本候选题已失效。"
+    questions = db.scalars(
+        select(QuizQuestion).where(QuizQuestion.related_content_id == content.id)
+    ).all()
+    for question in questions:
+        if question.related_version_id is not None and question.related_version_id != version.id:
+            mark_question_source_invalid(question, reason=stale_reason)
+            continue
+        if not should_mark_current_review:
+            continue
+        if (
+            question.review_status == QuizReviewStatus.APPROVED.value
+            and question.status == QuestionStatus.ENABLED.value
+        ):
+            question.status = QuestionStatus.DISABLED.value
+        question.needs_review = True
+        question.review_reason = review_reason
+
+
+def publish_content(
+    db: Session,
+    *,
+    content_id: int,
+    update_level: UpdateLevel | str = UpdateLevel.MAJOR,
+    change_summary: str | None = None,
+    quiz_action: QuizAction | str | None = None,
+    ai_suggested_update_level: UpdateLevel | str | None = None,
+    ai_suggestion_reason: str | None = None,
+) -> ContentVersion:
+    update_level_value = enum_value(update_level) or UpdateLevel.MAJOR.value
+    quiz_action_value = enum_value(quiz_action) or default_quiz_action_for(update_level_value)
+    ai_suggested_update_level_value = enum_value(ai_suggested_update_level)
+
     content = db.scalar(
         select(Content)
         .where(Content.id == content_id)
@@ -155,6 +216,11 @@ def publish_content(db: Session, *, content_id: int) -> ContentVersion:
         body=content.draft_body,
         structured_payload=content.draft_payload,
         permission_level=content.permission_level,
+        update_level=update_level_value,
+        change_summary=change_summary,
+        quiz_action=quiz_action_value,
+        ai_suggested_update_level=ai_suggested_update_level_value,
+        ai_suggestion_reason=ai_suggestion_reason,
         published_at=now,
         effective_at=now,
         created_by=content.created_by,
@@ -165,6 +231,20 @@ def publish_content(db: Session, *, content_id: int) -> ContentVersion:
     content.index_status = IndexStatus.NOT_SYNCED.value
     content.current_version = version
     content.published_draft_revision = content.draft_revision
+    mark_related_quiz_questions_for_review(
+        db,
+        content=content,
+        update_level=update_level_value,
+        version=version,
+    )
+
+    from app.services.quiz_service import deactivate_stale_quiz_sets_for_content
+
+    deactivate_stale_quiz_sets_for_content(
+        db,
+        content_id=content.id,
+        current_version_id=version.id,
+    )
 
     from app.services.rag_index_service import replace_chunks_for_version
 
@@ -182,6 +262,10 @@ def offline_content(db: Session, *, content_id: int) -> Content:
         chunk.is_active = False
     for record in content.vector_index_records:
         record.is_active = False
+
+    from app.services.quiz_service import deactivate_quiz_assets_for_offline_content
+
+    deactivate_quiz_assets_for_offline_content(db, content_id=content.id)
     db.commit()
     db.refresh(content)
     return content

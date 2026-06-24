@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_content_visible, get_current_user, get_dashscope_client, get_milvus_client, require_admin
@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.domain.enums import ContentStatus, ContentType
 from app.models.content import Content, ContentVersion
 from app.models.user import User
-from app.schemas.content import ContentCreate, ContentUpdate
+from app.schemas.content import ContentCreate, ContentPublishRequest, ContentUpdate
 from app.services.content_service import (
     content_to_admin_dict,
     create_content,
@@ -23,6 +23,7 @@ from app.services.content_service import (
     version_payload,
 )
 from app.services.rag_index_service import sync_content_index
+from app.services.quiz_service import quiz_generation_status_for_version
 
 
 router = APIRouter(tags=["content"])
@@ -50,7 +51,7 @@ def admin_list_contents(
     category: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     items, total = list_admin_contents(
@@ -92,14 +93,26 @@ def admin_update_content(
 @router.post("/api/admin/contents/{content_id}/publish")
 def admin_publish_content(
     content_id: int,
-    _admin: User = Depends(require_admin),
+    payload: ContentPublishRequest | None = Body(default=None),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
     dashscope_client=Depends(get_dashscope_client),
     milvus_client=Depends(get_milvus_client),
 ) -> dict[str, Any]:
-    publish_content(db, content_id=content_id)
+    publish_request = payload or ContentPublishRequest()
+    version = publish_content(
+        db,
+        content_id=content_id,
+        update_level=publish_request.update_level,
+        change_summary=publish_request.change_summary,
+        quiz_action=publish_request.quiz_action,
+        ai_suggested_update_level=publish_request.ai_suggested_update_level,
+        ai_suggestion_reason=publish_request.ai_suggestion_reason,
+    )
     sync_content_index(db, content_id=content_id, dashscope_client=dashscope_client, milvus_client=milvus_client)
-    return content_summary(get_content_or_404(db, content_id))
+    payload = content_summary(get_content_or_404(db, content_id))
+    payload["quiz_generation_status"] = quiz_generation_status_for_version(db, version)
+    return payload
 
 
 @router.post("/api/admin/contents/{content_id}/retry-index")
@@ -145,6 +158,11 @@ def admin_list_versions(
                 "created_by": version.created_by,
                 "created_by_name": version.creator.display_name if version.creator else None,
                 "permission_level": version.permission_level,
+                "update_level": version.update_level,
+                "change_summary": version.change_summary,
+                "quiz_action": version.quiz_action,
+                "ai_suggested_update_level": version.ai_suggested_update_level,
+                "ai_suggestion_reason": version.ai_suggestion_reason,
             }
             for version in versions
         ]
@@ -160,6 +178,7 @@ def must_read_item(content: Content) -> dict[str, Any]:
         "published_at": version.published_at,
         "effective_at": version.effective_at,
         "permission_level": content.permission_level,
+        "update_level": version.update_level,
         "update_body": payload.get("update_body", version.body),
         "adjustment_points": payload.get("adjustment_points", []),
     }
@@ -202,6 +221,7 @@ def script_item(content: Content) -> dict[str, Any]:
             "title": version.title,
             "category": content.category,
             "permission_level": content.permission_level,
+            "update_level": version.update_level,
             "updated_at": version.published_at,
             "scene": payload.get("scene"),
             "recommended_speech_summary": (payload.get("recommended_speech") or version.body)[:80],
@@ -212,6 +232,7 @@ def script_item(content: Content) -> dict[str, Any]:
         "title": version.title,
         "category": content.category,
         "permission_level": content.permission_level,
+        "update_level": version.update_level,
         "updated_at": version.published_at,
         "summary_points": (payload.get("points") or [])[:5],
     }
@@ -267,6 +288,7 @@ def app_get_script(
             "content_type": content.content_type,
             "category": content.category,
             "permission_level": content.permission_level,
+            "update_level": version.update_level,
             "scene": payload.get("scene"),
             "recommended_speech": payload.get("recommended_speech"),
             "forbidden_speech": payload.get("forbidden_speech"),
@@ -280,6 +302,7 @@ def app_get_script(
         "content_type": content.content_type,
         "category": content.category,
         "permission_level": content.permission_level,
+        "update_level": version.update_level,
         "body": version.body,
         "summary_points": payload.get("points", []),
         "updated_at": version.published_at,

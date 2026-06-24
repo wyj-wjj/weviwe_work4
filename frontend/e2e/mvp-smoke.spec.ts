@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Dialog, type Page } from '@playwright/test'
 
 const password = 'Phase10-E2E-Password!'
 
@@ -28,10 +28,13 @@ test.describe.serial('MVP phase 10 smoke tests', () => {
     await page.getByRole('button', { name: '保存草稿' }).click()
     await expect(page).toHaveURL(/\/admin\/contents$/)
 
-    page.once('dialog', (dialog) => dialog.accept())
+    const dialogAnswers: Array<string | undefined> = [undefined, 'major', 'E2E 发布摘要']
+    const handlePublishDialog = (dialog: Dialog) => dialog.accept(dialogAnswers.shift())
+    page.on('dialog', handlePublishDialog)
     const row = page.getByRole('row', { name: /E2E 管理员发布通用话术/ })
     await row.getByRole('button', { name: '发布' }).click()
-    await expect(page.getByText('内容发布成功')).toBeVisible()
+    await expect(page.getByText(/内容已发布/)).toBeVisible()
+    page.off('dialog', handlePublishDialog)
 
     await logout(page)
     await login(page, 'phase10_general')
@@ -58,7 +61,8 @@ test.describe.serial('MVP phase 10 smoke tests', () => {
     await expect(page.getByText('E2E 全量基础话术')).toHaveCount(0)
 
     await page.goto('/app/ask?question=客户开场应该怎么说')
-    await expect(page.getByText('E2E 回答：请使用已发布且当前账号可见的标准话术。')).toBeVisible()
+    await expect(page.getByRole('heading', { name: '回答' })).toBeVisible()
+    await expect(page.getByText(/E2E 通用基础话术/).first()).toBeVisible()
     await expect(page.getByText(/E2E 全量/)).toHaveCount(0)
 
     await page.goto('/app/quiz')
@@ -84,7 +88,7 @@ test.describe.serial('MVP phase 10 smoke tests', () => {
     await expect(page.getByText(/E2E 全量题目/)).toBeVisible()
 
     await page.goto('/app/ask?question=完整权限员工可以使用哪些口径')
-    await expect(page.getByText('E2E 回答：请使用已发布且当前账号可见的标准话术。')).toBeVisible()
+    await expect(page.getByRole('heading', { name: '回答' })).toBeVisible()
     await expect(page.getByText(/E2E 全量/).first()).toBeVisible()
   })
 

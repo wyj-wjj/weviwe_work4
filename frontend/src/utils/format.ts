@@ -9,6 +9,19 @@ export function permissionLabel(value: string): string {
   return value === 'full' ? '全量级' : '通用级'
 }
 
+export function updateLevelLabel(value: string | null | undefined): string {
+  if (value === 'minor') {
+    return '小更新'
+  }
+  if (value === 'medium') {
+    return '中更新'
+  }
+  if (value === 'major') {
+    return '大更新'
+  }
+  return '-'
+}
+
 export function contentTypeLabel(value: string): string {
   if (value === 'must_read') {
     return '最新必读'

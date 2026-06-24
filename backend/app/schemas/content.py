@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domain.enums import ContentLevel, ContentType
+from app.domain.enums import ContentLevel, ContentType, QuizAction, UpdateLevel
 
 
 class ContentCreate(BaseModel):
@@ -34,6 +34,14 @@ class ContentUpdate(BaseModel):
     structured_payload: dict[str, Any] | None = None
 
 
+class ContentPublishRequest(BaseModel):
+    update_level: UpdateLevel = UpdateLevel.MAJOR
+    change_summary: str | None = None
+    quiz_action: QuizAction | None = None
+    ai_suggested_update_level: UpdateLevel | None = None
+    ai_suggestion_reason: str | None = None
+
+
 class ContentAdminOut(BaseModel):
     id: int
     content_type: str
@@ -43,6 +51,7 @@ class ContentAdminOut(BaseModel):
     status: str
     current_version_id: int | None
     current_version_no: int | None
+    current_update_level: str | None
     index_status: str
     summary: str | None
     body: str

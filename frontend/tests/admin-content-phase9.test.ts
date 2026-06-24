@@ -42,6 +42,7 @@ function contentItem(overrides: Record<string, unknown> = {}) {
     status: 'draft',
     current_version_id: null,
     current_version_no: null,
+    current_update_level: null,
     index_status: 'not_synced',
     summary: '摘要',
     body: '正文',
@@ -74,6 +75,7 @@ test('admin content list filters, paginates, gates actions, and labels every ind
           status: 'published',
           current_version_id: 2,
           current_version_no: 1,
+          current_update_level: 'medium',
           index_status: 'synced',
         }),
         contentItem({
@@ -106,6 +108,7 @@ test('admin content list filters, paginates, gates actions, and labels every ind
   await waitFor(() => expect(getByText('基础接待话术')).toBeInTheDocument())
   expect(getByText('未同步')).toBeInTheDocument()
   expect(getByText('已同步')).toBeInTheDocument()
+  expect(getByText('中更新')).toBeInTheDocument()
   expect(getByText('同步失败')).toBeInTheDocument()
   expect(getByText('同步中')).toBeInTheDocument()
   expect(getAllByRole('link', { name: '编辑' })).toHaveLength(4)
@@ -149,6 +152,9 @@ test('admin content list filters, paginates, gates actions, and labels every ind
 
 test('admin content actions confirm publish/offline, report failed indexing, and refresh retry', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(window, 'prompt')
+    .mockReturnValueOnce('major')
+    .mockReturnValueOnce('关键规则变更')
   const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
     data: {
       items: [
@@ -184,7 +190,10 @@ test('admin content actions confirm publish/offline, report failed indexing, and
 
   await fireEvent.click(getByRole('button', { name: '发布' }))
   await waitFor(() =>
-    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish'),
+    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish', {
+      update_level: 'major',
+      change_summary: '关键规则变更',
+    }),
   )
   expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('全量级'))
   expect(getByText('内容已发布，但 AI 检索暂不可用')).toBeInTheDocument()
@@ -205,6 +214,9 @@ test('admin content actions confirm publish/offline, report failed indexing, and
 
 test('publish response must confirm published status before reporting success', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(window, 'prompt')
+    .mockReturnValueOnce('medium')
+    .mockReturnValueOnce('局部规则变更')
   vi.spyOn(apiClient, 'get').mockResolvedValue({
     data: {
       items: [
@@ -239,14 +251,69 @@ test('publish response must confirm published status before reporting success', 
   await fireEvent.click(getByRole('button', { name: '发布' }))
 
   await waitFor(() =>
-    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish'),
+    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish', {
+      update_level: 'medium',
+      change_summary: '局部规则变更',
+    }),
   )
   expect(getByText('发布未完成，请刷新后确认内容状态')).toBeInTheDocument()
   expect(queryByText('内容发布成功')).not.toBeInTheDocument()
 })
 
+test('publish success with pending quiz generation gives a non-failure follow-up message', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(window, 'prompt')
+    .mockReturnValueOnce('major')
+    .mockReturnValueOnce('新增关键口径')
+  vi.spyOn(apiClient, 'get').mockResolvedValue({
+    data: {
+      items: [
+        contentItem({
+          id: 8,
+          title: '大更新内容',
+          status: 'draft',
+          current_version_id: null,
+          current_version_no: null,
+          index_status: 'not_synced',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+    },
+  })
+  const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+    data: contentItem({
+      id: 8,
+      title: '大更新内容',
+      status: 'published',
+      current_version_id: 88,
+      current_version_no: 1,
+      index_status: 'synced',
+      quiz_generation_status: 'pending',
+    }),
+  })
+
+  const { getByRole, getByText, queryByText } = await renderAdmin('/admin/contents')
+  await waitFor(() => expect(getByText('大更新内容')).toBeInTheDocument())
+
+  await fireEvent.click(getByRole('button', { name: '发布' }))
+
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith('/admin/contents/8/publish', {
+      update_level: 'major',
+      change_summary: '新增关键口径',
+    }),
+  )
+  expect(getByText('内容已发布；AI 候选题可在历史版本页生成')).toBeInTheDocument()
+  expect(queryByText('发布失败，请稍后重试')).not.toBeInTheDocument()
+})
+
 test('publish pending prevents duplicate requests and disables every mutation for the same content', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
+  vi.spyOn(window, 'prompt')
+    .mockReturnValueOnce('minor')
+    .mockReturnValueOnce('修正错别字')
   vi.spyOn(apiClient, 'get').mockResolvedValue({
     data: {
       items: [
@@ -274,7 +341,10 @@ test('publish pending prevents duplicate requests and disables every mutation fo
   await fireEvent.click(publishButton)
 
   expect(post).toHaveBeenCalledTimes(1)
-  expect(post).toHaveBeenCalledWith('/admin/contents/8/publish')
+  expect(post).toHaveBeenCalledWith('/admin/contents/8/publish', {
+    update_level: 'minor',
+    change_summary: '修正错别字',
+  })
   expect(getByRole('button', { name: '发布中' })).toBeDisabled()
   expect(getByRole('button', { name: '下线' })).toBeDisabled()
   expect(getByRole('button', { name: '重试索引' })).toBeDisabled()
@@ -447,16 +517,48 @@ test('admin content history renders version snapshot and publisher', async () =>
           created_by: 1,
           created_by_name: '管理员',
           permission_level: 'full',
+          update_level: 'major',
+          change_summary: '关键规则变更',
+          quiz_action: 'generate_pack',
+          ai_suggested_update_level: null,
+          ai_suggestion_reason: null,
         },
       ],
     },
   })
+  const post = vi.spyOn(apiClient, 'post').mockResolvedValue({
+    data: {
+      id: 7,
+      content_id: 11,
+      version_id: 11,
+      update_level: 'major',
+      status: 'completed',
+      model_name: 'qwen-plus',
+      prompt_version: 'quiz-generation-v1',
+      requested_count: 5,
+      generated_count: 3,
+      created_by: 1,
+      created_at: '2026-06-18T09:05:00',
+      error_message: null,
+    },
+  })
 
-  const { getByText } = await renderAdmin('/admin/contents/11/versions')
+  const { getByRole, getByText } = await renderAdmin('/admin/contents/11/versions')
 
   await waitFor(() => expect(getByText('第二版口径')).toBeInTheDocument())
   expect(getByText('版本 2')).toBeInTheDocument()
   expect(getByText('发布人：管理员')).toBeInTheDocument()
   expect(getByText('全量级')).toBeInTheDocument()
+  expect(getByText('更新级别：大更新')).toBeInTheDocument()
+  expect(getByText('题库动作：建议生成专题候选题')).toBeInTheDocument()
+  expect(getByText('变更摘要：关键规则变更')).toBeInTheDocument()
   expect(getByText('第二版正文')).toBeInTheDocument()
+
+  await fireEvent.click(getByRole('button', { name: '生成候选题' }))
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith('/admin/contents/11/versions/11/generate-quiz', {
+      create_quiz_set: true,
+    }),
+  )
+  expect(getByText('已生成 3 道候选题，批次 ID：7')).toBeInTheDocument()
 })

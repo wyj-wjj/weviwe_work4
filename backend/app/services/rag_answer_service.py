@@ -205,6 +205,7 @@ def source_from_chunk(chunk: ContentChunk, *, relevance_score: float) -> dict[st
         "title": version.title,
         "content_type": content.content_type,
         "updated_at": version.published_at,
+        "update_level": version.update_level,
         "relevance_score": relevance_score,
     }
 

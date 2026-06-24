@@ -9,10 +9,12 @@ export interface AdminContent {
   status: 'draft' | 'published' | 'offline'
   current_version_id: number | null
   current_version_no: number | null
+  current_update_level: ContentUpdateLevel | null
   index_status: 'not_synced' | 'syncing' | 'synced' | 'failed'
   summary: string | null
   body: string
   structured_payload: Record<string, unknown> | null
+  quiz_generation_status?: 'not_required' | 'pending' | 'completed' | 'failed'
 }
 
 export interface AdminContentPayload {
@@ -34,6 +36,17 @@ export interface AdminContentFilters {
   page_size: number
 }
 
+export type ContentUpdateLevel = 'minor' | 'medium' | 'major'
+export type ContentQuizAction = 'none' | 'review_related' | 'generate_pack'
+
+export interface AdminContentPublishPayload {
+  update_level: ContentUpdateLevel
+  change_summary?: string | null
+  quiz_action?: ContentQuizAction | null
+  ai_suggested_update_level?: ContentUpdateLevel | null
+  ai_suggestion_reason?: string | null
+}
+
 export interface AdminContentVersion {
   id: number
   version_no: number
@@ -47,6 +60,11 @@ export interface AdminContentVersion {
   created_by: number
   created_by_name: string | null
   permission_level: 'general' | 'full'
+  update_level: ContentUpdateLevel
+  change_summary: string | null
+  quiz_action: ContentQuizAction
+  ai_suggested_update_level: ContentUpdateLevel | null
+  ai_suggestion_reason: string | null
 }
 
 export async function listAdminContents(params: AdminContentFilters) {
@@ -77,8 +95,11 @@ export async function updateAdminContent(
   return response.data
 }
 
-export async function publishAdminContent(contentId: number) {
-  const response = await apiClient.post<AdminContent>(`/admin/contents/${contentId}/publish`)
+export async function publishAdminContent(contentId: number, payload?: AdminContentPublishPayload) {
+  const endpoint = `/admin/contents/${contentId}/publish`
+  const response = payload
+    ? await apiClient.post<AdminContent>(endpoint, payload)
+    : await apiClient.post<AdminContent>(endpoint)
   return response.data
 }
 

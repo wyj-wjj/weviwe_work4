@@ -6,7 +6,7 @@ import { getScript, type ScriptDetail } from '../../api/content'
 import AppState from '../../components/AppState.vue'
 import CopyButton from '../../components/CopyButton.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
-import { formatDateTime, permissionLabel } from '../../utils/format'
+import { formatDateTime, permissionLabel, updateLevelLabel } from '../../utils/format'
 
 const route = useRoute()
 const script = ref<ScriptDetail | null>(null)
@@ -41,6 +41,7 @@ onMounted(async () => {
         <h2>{{ script.title }}</h2>
         <p>
           <span>更新时间：{{ formatDateTime(script.updated_at) }}</span>
+          <span>更新级别：{{ updateLevelLabel(script.update_level) }}</span>
           <strong>{{ permissionLabel(script.permission_level) }}</strong>
         </p>
       </header>

@@ -8,10 +8,11 @@ import {
   publishAdminContent,
   retryAdminContentIndex,
   type AdminContent,
+  type AdminContentPublishPayload,
 } from '../../api/admin-content'
 import AdminLayout from '../../components/AdminLayout.vue'
 import AppState from '../../components/AppState.vue'
-import { contentTypeLabel, permissionLabel } from '../../utils/format'
+import { contentTypeLabel, permissionLabel, updateLevelLabel } from '../../utils/format'
 
 const items = ref<AdminContent[]>([])
 const total = ref(0)
@@ -41,6 +42,45 @@ const indexLabels: Record<string, string> = {
   syncing: '同步中',
   synced: '已同步',
   failed: '同步失败',
+}
+
+type UpdateLevel = AdminContentPublishPayload['update_level']
+
+function normalizeUpdateLevel(value: string | null): UpdateLevel | null {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'minor' || normalized === 'medium' || normalized === 'major') {
+    return normalized
+  }
+  return null
+}
+
+function requestPublishPayload(item: AdminContent): AdminContentPublishPayload | null {
+  const defaultLevel: UpdateLevel = item.current_version_id ? 'minor' : 'major'
+  const selectedLevel = window.prompt(
+    [
+      '请输入本次更新级别：minor / medium / major',
+      'minor：小更新，不影响题库',
+      'medium：中更新，关联题目需复核',
+      'major：大更新，建议生成专题候选题',
+    ].join('\n'),
+    defaultLevel,
+  )
+  if (selectedLevel === null) {
+    return null
+  }
+  const updateLevel = normalizeUpdateLevel(selectedLevel)
+  if (!updateLevel) {
+    message.value = '更新级别必须是 minor、medium 或 major'
+    return null
+  }
+  const summary = window.prompt('本次变更摘要，可留空：', '')
+  if (summary === null) {
+    return null
+  }
+  return {
+    update_level: updateLevel,
+    change_summary: summary.trim() || null,
+  }
 }
 
 async function loadContents() {
@@ -106,6 +146,22 @@ function publishConfirmation(item: AdminContent) {
   ].join('\n')
 }
 
+function publishSuccessMessage(result: AdminContent) {
+  if (result.index_status === 'failed') {
+    return '内容已发布，但 AI 检索暂不可用'
+  }
+  if (result.quiz_generation_status === 'pending') {
+    return '内容已发布；AI 候选题可在历史版本页生成'
+  }
+  if (result.quiz_generation_status === 'failed') {
+    return '内容已发布；AI 候选题生成失败，可在历史版本页重试'
+  }
+  if (result.quiz_generation_status === 'completed') {
+    return '内容已发布；AI 候选题已生成，待管理员审核'
+  }
+  return '内容发布成功'
+}
+
 async function publish(item: AdminContent) {
   if (isPending(item)) {
     return
@@ -114,16 +170,17 @@ async function publish(item: AdminContent) {
     return
   }
   message.value = ''
+  const publishPayload = requestPublishPayload(item)
+  if (!publishPayload) {
+    return
+  }
   pendingActions[item.id] = 'publish'
   try {
-    const result = await publishAdminContent(item.id)
+    const result = await publishAdminContent(item.id, publishPayload)
     if (!isPublishConfirmed(result)) {
       message.value = '发布未完成，请刷新后确认内容状态'
     } else {
-      message.value =
-        result.index_status === 'failed'
-          ? '内容已发布，但 AI 检索暂不可用'
-          : '内容发布成功'
+      message.value = publishSuccessMessage(result)
     }
     await loadContents()
   } catch {
@@ -232,6 +289,7 @@ onMounted(loadContents)
               <th>权限</th>
               <th>状态</th>
               <th>版本</th>
+              <th>更新级别</th>
               <th>索引状态</th>
               <th>操作</th>
             </tr>
@@ -243,6 +301,7 @@ onMounted(loadContents)
               <td>{{ permissionLabel(item.permission_level) }}</td>
               <td>{{ statusLabels[item.status] }}</td>
               <td>{{ item.current_version_no ? `v${item.current_version_no}` : '-' }}</td>
+              <td>{{ updateLevelLabel(item.current_update_level) }}</td>
               <td>
                 <span class="status-tag" :data-status="item.index_status">
                   {{ indexLabels[item.index_status] || item.index_status }}
