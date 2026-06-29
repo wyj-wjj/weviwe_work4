@@ -6,6 +6,8 @@ export interface AdminUser {
   display_name: string
   account_type: 'admin' | 'full_user' | 'general_user'
   content_level: 'general' | 'full'
+  department_id: number | null
+  department_name: string | null
   is_active: boolean
   created_at?: string
   updated_at: string
@@ -17,6 +19,7 @@ export interface AdminUserCreatePayload {
   display_name: string
   account_type: AdminUser['account_type']
   content_level: AdminUser['content_level']
+  department_id?: number | null
 }
 
 export interface AdminUserUpdatePayload {
@@ -24,6 +27,7 @@ export interface AdminUserUpdatePayload {
   display_name: string
   account_type: AdminUser['account_type']
   content_level: AdminUser['content_level']
+  department_id?: number | null
   is_active: boolean
 }
 

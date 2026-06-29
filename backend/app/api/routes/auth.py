@@ -21,6 +21,8 @@ def public_user(user: User) -> UserPublic:
         display_name=user.display_name,
         account_type=user.account_type,
         content_level=user.content_level,
+        department_id=user.department_id,
+        department_name=user.department.name if user.department else None,
     )
 
 

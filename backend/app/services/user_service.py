@@ -7,6 +7,7 @@ from app.core.errors import AppError
 from app.core.security import hash_password
 from app.domain.enums import AccountType, ContentLevel
 from app.models.user import User
+from app.services.department_service import ensure_active_department
 
 
 def user_to_admin_dict(user: User) -> dict[str, Any]:
@@ -16,6 +17,8 @@ def user_to_admin_dict(user: User) -> dict[str, Any]:
         "display_name": user.display_name,
         "account_type": user.account_type,
         "content_level": user.content_level,
+        "department_id": user.department_id,
+        "department_name": user.department.name if user.department else None,
         "is_active": user.is_active,
         "created_at": user.created_at,
         "updated_at": user.updated_at,
@@ -49,12 +52,15 @@ def validate_role_level(account_type: str, content_level: str) -> None:
 def create_user(db: Session, payload: Any) -> User:
     ensure_username_available(db, payload.username)
     validate_role_level(payload.account_type.value, payload.content_level.value)
+    if payload.department_id is not None:
+        ensure_active_department(db, payload.department_id)
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
         account_type=payload.account_type.value,
         content_level=payload.content_level.value,
+        department_id=payload.department_id,
         is_active=True,
     )
     db.add(user)
@@ -85,6 +91,8 @@ def update_user(db: Session, *, user_id: int, payload: Any) -> User:
     next_account_type = updates.get("account_type", user.account_type)
     next_content_level = updates.get("content_level", user.content_level)
     validate_role_level(next_account_type, next_content_level)
+    if "department_id" in updates and updates["department_id"] is not None:
+        ensure_active_department(db, updates["department_id"])
 
     for key, value in updates.items():
         setattr(user, key, value)

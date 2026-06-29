@@ -4,7 +4,7 @@
 - 前端是一个 Vue 3 + TypeScript + Vite SPA，承载登录页、员工端 `/app` 和后台端 `/admin`，并通过 Pinia 保存会话状态、通过 Vue Router 守卫控制前后台入口。
 - 后端是一个 FastAPI 单体服务，承载 REST API、认证授权、内容管理、员工内容读取、测验管理、RAG 索引和 AI 问答编排。
 - MySQL 是唯一权威业务数据源；自动化测试使用 SQLite 临时库验证模型、迁移和 API 行为，不改变生产目标。
-- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status` -> `0004_publish_revision_permission` -> `0005_quiz_update_policy` -> `0006_quiz_ai_generation_sets`。
+- Alembic 管理表结构，当前迁移链为 `0001_initial_schema` -> `0002_add_content_draft_fields` -> `0003_add_content_index_status` -> `0004_publish_revision_permission` -> `0005_quiz_update_policy` -> `0006_quiz_ai_generation_sets` -> `0007_department_scope`。
 - Milvus 通过后端集成边界访问；自动化测试使用内存假客户端，真实模式使用 PyMilvus `MilvusClient` 写入本地 Milvus，Milvus 只作为向量索引，不保存权威正文。
 - DashScope 只能由后端调用；真实模式通过 OpenAI-compatible `/embeddings` 和 `/chat/completions` 调用，自动化测试使用假客户端或 `httpx.MockTransport`，不默认调用真实模型服务。
 
@@ -322,3 +322,16 @@
 - 内容下线时不再只停用专题包，还会同步处理关联题目：草稿或待审核题自动置为 `rejected + disabled`，已通过题置为 `disabled + needs_review`，并写入“源内容已下线”的复核/驳回原因。
 - 内容重新发布新版本时，旧版本专题包会自动置为 `inactive`；绑定旧版本的草稿或待审核题自动驳回并禁用，已通过旧题禁用并标记待复核，复核原因记录旧版本已被新版本替代。
 - 后台测验题管理页新增“来源状态”列。来源失效题不再显示“审核通过并启用”或普通“启用”操作，只保留安全的“驳回”清理动作；审核、驳回、启用和禁用按钮增加行级处理中状态，减少连续点击和列表刷新造成的交互漂移。
+
+## 2026-06-25 部门范围权限补充
+
+- 在不推翻既有 `permission_level` 的前提下，权限模型扩展为“横向归属范围 + 纵向账号等级”两层过滤：`scope_type` 负责内容是否全公司通用或限定某个部门，`permission_level` 继续负责通用级/全量级敏感度过滤。
+- 新增 `departments` 表，员工账号 `users.department_id` 可选关联一个启用部门。未分配部门的员工仍可登录，但只能依账号等级查看 `scope_type=global` 的内容；管理员不受部门过滤限制。
+- `contents`、`content_versions`、`content_chunks` 均新增 `scope_type` 与 `department_id`。发布时会把内容当前范围快照到版本和 chunk，保证历史版本、RAG chunk 与当前内容范围有一致来源。
+- 存量内容迁移默认写入 `scope_type=global`、`department_id=null`，存量账号默认 `department_id=null`，因此迁移后不会突然把旧内容隐藏，也不会强制老账号必须立刻补部门。
+- 内容范围合法性由后端统一校验：全公司通用内容不得绑定部门；部门限定内容必须绑定一个启用部门。前端展示和隐藏入口只做交互辅助，不能替代后端权限判断。
+- 员工端最新必读、标准话术、详情、AI 来源和巩固测试均执行统一过滤：先按 `scope_type/department_id` 判断部门范围，再按 `permission_level` 判断账号等级。全公司通用内容仍按账号等级可见；部门限定内容只对同部门且等级足够的员工可见。
+- RAG 混合检索两条路径都纳入部门范围：Milvus metadata 增加 `scope_type`/`department_id` 过滤，MySQL 关键词召回和最终正文回查也再次执行 scope + permission 双重校验。Milvus 仍不是权威来源，AI 回答前必须回查 MySQL。
+- 测验题中绑定内容的题目跟随关联内容当前范围和权限可见性；非绑定内容的人工通用题暂不新增部门字段，仍按题目自身 `permission_level` 控制，避免把题库一次性复杂化。
+- 后台新增部门管理 API 与页面；账号管理页面可给员工分配部门；内容编辑与列表页面可设置/展示“全公司通用”或“限定部门”。员工端页面展示可见范围，减少员工误解“为什么我看到了/看不到这条内容”。
+- 本轮验证基线：后端 `python -m pytest backend\tests -q` 通过；前端 `pnpm run test:unit` 为 `65 passed`；前端 `pnpm run build` 通过。

@@ -6,6 +6,9 @@ export interface AdminContent {
   title: string
   category: string | null
   permission_level: 'general' | 'full'
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   status: 'draft' | 'published' | 'offline'
   current_version_id: number | null
   current_version_no: number | null
@@ -22,6 +25,8 @@ export interface AdminContentPayload {
   title: string
   category: string
   permission_level: AdminContent['permission_level']
+  scope_type?: AdminContent['scope_type']
+  department_id?: number | null
   summary: string
   body: string
   structured_payload: Record<string, unknown>
@@ -60,6 +65,9 @@ export interface AdminContentVersion {
   created_by: number
   created_by_name: string | null
   permission_level: 'general' | 'full'
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   update_level: ContentUpdateLevel
   change_summary: string | null
   quiz_action: ContentQuizAction

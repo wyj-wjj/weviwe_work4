@@ -24,6 +24,8 @@ class MilvusSearchRequest:
     collection_name: str
     query_vector: list[float]
     allowed_permission_levels: set[str]
+    visible_department_id: int | None
+    include_all_department_scoped: bool
     top_k: int
 
 
@@ -45,6 +47,8 @@ class FakeMilvusClient:
                 "version_id",
                 "chunk_id",
                 "permission_level",
+                "scope_type",
+                "department_id",
                 "content_status",
                 "is_active",
                 "effective_at",
@@ -67,12 +71,16 @@ class FakeMilvusClient:
         query_vector: list[float],
         allowed_permission_levels: set[str],
         top_k: int,
+        visible_department_id: int | None = None,
+        include_all_department_scoped: bool = False,
     ) -> list[MilvusSearchHit]:
         self.search_requests.append(
             MilvusSearchRequest(
                 collection_name=collection_name,
                 query_vector=query_vector,
                 allowed_permission_levels=set(allowed_permission_levels),
+                visible_department_id=visible_department_id,
+                include_all_department_scoped=include_all_department_scoped,
                 top_k=top_k,
             )
         )
@@ -92,6 +100,15 @@ class FakeMilvusClient:
             for hit in candidates
             if hit.metadata.get("is_active", True)
             and hit.metadata.get("permission_level") in allowed_permission_levels
+            and (
+                include_all_department_scoped
+                or hit.metadata.get("scope_type", "global") == "global"
+                or (
+                    hit.metadata.get("scope_type") == "department"
+                    and visible_department_id is not None
+                    and hit.metadata.get("department_id") == visible_department_id
+                )
+            )
         ]
         return sorted(filtered, key=lambda hit: hit.score, reverse=True)[:top_k]
 
@@ -127,6 +144,20 @@ class FakeMilvusClient:
 
 
 class RealMilvusClient:
+    _LEGACY_FIELD_NAMES = {
+        "milvus_primary_key",
+        "vector",
+        "content_id",
+        "version_id",
+        "chunk_id",
+        "permission_level",
+        "content_status",
+        "is_active",
+        "effective_at",
+        "expired_at",
+    }
+    _SCOPE_FIELD_NAMES = {"scope_type", "department_id"}
+
     def __init__(self, *, host: str, port: int) -> None:
         self.host = host
         self.port = port
@@ -134,11 +165,13 @@ class RealMilvusClient:
         from pymilvus import MilvusClient
 
         self.client = MilvusClient(uri=self.uri)
+        self._field_cache: dict[str, set[str]] = {}
 
     def ensure_collection(self, collection_name: str, *, dimension: int) -> None:
         from pymilvus import DataType, MilvusClient
 
         if self.client.has_collection(collection_name):
+            self._collection_field_names(collection_name)
             return
 
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -148,6 +181,8 @@ class RealMilvusClient:
         schema.add_field("version_id", DataType.INT64)
         schema.add_field("chunk_id", DataType.INT64)
         schema.add_field("permission_level", DataType.VARCHAR, max_length=32)
+        schema.add_field("scope_type", DataType.VARCHAR, max_length=32)
+        schema.add_field("department_id", DataType.INT64, nullable=True)
         schema.add_field("content_status", DataType.VARCHAR, max_length=32)
         schema.add_field("is_active", DataType.BOOL)
         schema.add_field("effective_at", DataType.VARCHAR, max_length=64, nullable=True)
@@ -160,13 +195,15 @@ class RealMilvusClient:
             schema=schema,
             index_params=index_params,
         )
+        self._field_cache[collection_name] = self._LEGACY_FIELD_NAMES | self._SCOPE_FIELD_NAMES
 
     def upsert_vectors(self, collection_name: str, vectors: list[MilvusVector]) -> None:
+        field_names = self._collection_field_names(collection_name)
         data = [
             {
                 "milvus_primary_key": vector.primary_key,
                 "vector": vector.vector,
-                **vector.metadata,
+                **self._metadata_supported_by_schema(vector.metadata, field_names),
             }
             for vector in vectors
         ]
@@ -182,25 +219,44 @@ class RealMilvusClient:
         query_vector: list[float],
         allowed_permission_levels: set[str],
         top_k: int,
+        visible_department_id: int | None = None,
+        include_all_department_scoped: bool = False,
     ) -> list[MilvusSearchHit]:
+        field_names = self._collection_field_names(collection_name)
         quoted_levels = ", ".join(f'"{level}"' for level in sorted(allowed_permission_levels))
-        filter_expr = f"is_active == true and permission_level in [{quoted_levels}]"
-        results = self.client.search(
-            collection_name=collection_name,
-            data=[query_vector],
-            filter=filter_expr,
-            limit=top_k,
-            output_fields=[
+        if include_all_department_scoped or not self._schema_supports_scope_filter(field_names):
+            scope_filter = ""
+        elif visible_department_id is None:
+            scope_filter = ' and scope_type == "global"'
+        else:
+            scope_filter = (
+                f' and (scope_type == "global" '
+                f'or (scope_type == "department" and department_id == {visible_department_id}))'
+            )
+        filter_expr = f"is_active == true and permission_level in [{quoted_levels}]{scope_filter}"
+        output_fields = [
+            field_name
+            for field_name in [
                 "content_id",
                 "version_id",
                 "chunk_id",
                 "permission_level",
+                "scope_type",
+                "department_id",
                 "content_status",
                 "is_active",
                 "effective_at",
                 "expired_at",
                 "milvus_primary_key",
-            ],
+            ]
+            if field_name in field_names
+        ]
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query_vector],
+            filter=filter_expr,
+            limit=top_k,
+            output_fields=output_fields,
             search_params={"metric_type": "COSINE"},
         )
         hits: list[MilvusSearchHit] = []
@@ -226,6 +282,39 @@ class RealMilvusClient:
         if not filters or not self.client.has_collection(collection_name):
             return
         self.client.delete(collection_name=collection_name, filter=" and ".join(filters))
+
+    def _collection_field_names(self, collection_name: str) -> set[str]:
+        if collection_name in self._field_cache:
+            return self._field_cache[collection_name]
+        if not self.client.has_collection(collection_name):
+            self._field_cache[collection_name] = self._LEGACY_FIELD_NAMES | self._SCOPE_FIELD_NAMES
+            return self._field_cache[collection_name]
+        try:
+            try:
+                description = self.client.describe_collection(collection_name=collection_name)
+            except TypeError:
+                description = self.client.describe_collection(collection_name)
+            raw_fields = description.get("fields", []) if isinstance(description, dict) else []
+            field_names: set[str] = set()
+            for field in raw_fields:
+                if isinstance(field, dict):
+                    field_name = field.get("name") or field.get("field_name")
+                else:
+                    field_name = getattr(field, "name", None)
+                if field_name:
+                    field_names.add(str(field_name))
+        except Exception:
+            field_names = set(self._LEGACY_FIELD_NAMES)
+        if not field_names:
+            field_names = set(self._LEGACY_FIELD_NAMES)
+        self._field_cache[collection_name] = field_names
+        return field_names
+
+    def _metadata_supported_by_schema(self, metadata: dict, field_names: set[str]) -> dict:
+        return {key: value for key, value in metadata.items() if key in field_names}
+
+    def _schema_supports_scope_filter(self, field_names: set[str]) -> bool:
+        return self._SCOPE_FIELD_NAMES <= field_names
 
 
 def create_milvus_client(settings: Settings | None = None) -> FakeMilvusClient | RealMilvusClient:

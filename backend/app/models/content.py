@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
+from app.domain.enums import ContentLevel, ContentScope, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
 from app.models.base import Base, TimestampMixin, utc_now
 
 
@@ -27,6 +27,15 @@ class Content(TimestampMixin, Base):
             f"index_status in {tuple(item.value for item in IndexStatus)}",
             name="ck_contents_index_status",
         ),
+        CheckConstraint(
+            f"scope_type in {tuple(item.value for item in ContentScope)}",
+            name="ck_contents_scope_type",
+        ),
+        CheckConstraint(
+            "(scope_type = 'global' and department_id is null) or "
+            "(scope_type = 'department' and department_id is not null)",
+            name="ck_contents_scope_department",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -34,6 +43,13 @@ class Content(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str | None] = mapped_column(String(128))
     permission_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ContentScope.GLOBAL.value,
+        server_default=ContentScope.GLOBAL.value,
+    )
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ContentStatus.DRAFT.value)
     index_status: Mapped[str] = mapped_column(String(32), nullable=False, default=IndexStatus.NOT_SYNCED.value)
     draft_summary: Mapped[str | None] = mapped_column(Text)
@@ -48,6 +64,7 @@ class Content(TimestampMixin, Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
     creator = relationship("User", back_populates="created_contents", foreign_keys=[created_by])
+    department = relationship("Department", back_populates="contents", foreign_keys=[department_id])
     versions = relationship("ContentVersion", back_populates="content", foreign_keys="ContentVersion.content_id")
     current_version = relationship(
         "ContentVersion",
@@ -72,6 +89,15 @@ class ContentVersion(Base):
             f"quiz_action in {tuple(item.value for item in QuizAction)}",
             name="ck_content_versions_quiz_action",
         ),
+        CheckConstraint(
+            f"scope_type in {tuple(item.value for item in ContentScope)}",
+            name="ck_content_versions_scope_type",
+        ),
+        CheckConstraint(
+            "(scope_type = 'global' and department_id is null) or "
+            "(scope_type = 'department' and department_id is not null)",
+            name="ck_content_versions_scope_department",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -82,6 +108,13 @@ class ContentVersion(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     structured_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     permission_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ContentScope.GLOBAL.value,
+        server_default=ContentScope.GLOBAL.value,
+    )
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
     update_level: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -104,6 +137,7 @@ class ContentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     content = relationship("Content", back_populates="versions", foreign_keys=[content_id])
+    department = relationship("Department", foreign_keys=[department_id])
     creator = relationship("User", back_populates="created_versions", foreign_keys=[created_by])
     chunks = relationship("ContentChunk", back_populates="version")
     vector_index_records = relationship("VectorIndexRecord", back_populates="version")
@@ -117,6 +151,17 @@ def snapshot_content_version_permission(_mapper, _connection, version: ContentVe
 
 class ContentChunk(TimestampMixin, Base):
     __tablename__ = "content_chunks"
+    __table_args__ = (
+        CheckConstraint(
+            f"scope_type in {tuple(item.value for item in ContentScope)}",
+            name="ck_content_chunks_scope_type",
+        ),
+        CheckConstraint(
+            "(scope_type = 'global' and department_id is null) or "
+            "(scope_type = 'department' and department_id is not null)",
+            name="ck_content_chunks_scope_department",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     content_id: Mapped[int] = mapped_column(ForeignKey("contents.id"), nullable=False, index=True)
@@ -127,10 +172,18 @@ class ContentChunk(TimestampMixin, Base):
     token_estimate: Mapped[int | None] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     permission_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ContentScope.GLOBAL.value,
+        server_default=ContentScope.GLOBAL.value,
+    )
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     content = relationship("Content", back_populates="chunks")
     version = relationship("ContentVersion", back_populates="chunks")
+    department = relationship("Department", foreign_keys=[department_id])
     vector_index_records = relationship("VectorIndexRecord", back_populates="chunk")
 
 

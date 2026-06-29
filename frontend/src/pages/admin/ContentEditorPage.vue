@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { listAdminDepartments, type Department } from '../../api/admin-departments'
 import {
   createAdminContent,
   getAdminContent,
@@ -18,12 +19,15 @@ const isEditing = computed(() => contentId.value > 0)
 const state = ref<'ready' | 'loading' | 'service'>('ready')
 const error = ref('')
 const isSaving = ref(false)
+const departments = ref<Department[]>([])
 
 const form = reactive({
   title: '',
   content_type: '',
   category: '',
   permission_level: '',
+  scope_type: 'global',
+  department_id: null as number | null,
   summary: '',
   body: '',
   scene: '',
@@ -40,6 +44,8 @@ function applyContent(content: Awaited<ReturnType<typeof getAdminContent>>) {
   form.content_type = content.content_type
   form.category = content.category || ''
   form.permission_level = content.permission_level
+  form.scope_type = content.scope_type || 'global'
+  form.department_id = content.department_id ?? null
   form.summary = content.summary || ''
   form.body = content.body
   form.scene = String(payload.scene || '')
@@ -62,6 +68,15 @@ async function loadContent() {
     state.value = 'ready'
   } catch {
     state.value = 'service'
+  }
+}
+
+async function loadDepartments() {
+  try {
+    const response = await listAdminDepartments(false)
+    departments.value = response.items
+  } catch {
+    departments.value = []
   }
 }
 
@@ -111,6 +126,9 @@ function isValid() {
   ) {
     return false
   }
+  if (form.scope_type === 'department' && !form.department_id) {
+    return false
+  }
   if (form.content_type === 'standard_script') {
     return Boolean(form.scene && form.recommended_speech)
   }
@@ -118,6 +136,12 @@ function isValid() {
     return Boolean(form.update_body && lines(form.adjustment_points).length)
   }
   return true
+}
+
+function onScopeTypeChange() {
+  if (form.scope_type === 'global') {
+    form.department_id = null
+  }
 }
 
 async function saveDraft() {
@@ -129,6 +153,13 @@ async function saveDraft() {
   isSaving.value = true
   try {
     const payload = buildPayload()
+    if (form.scope_type === 'department') {
+      payload.scope_type = 'department'
+      payload.department_id = form.department_id
+    } else if (isEditing.value) {
+      payload.scope_type = 'global'
+      payload.department_id = null
+    }
     if (isEditing.value) {
       const { content_type: _contentType, ...updatePayload } = payload
       await updateAdminContent(contentId.value, updatePayload)
@@ -143,7 +174,9 @@ async function saveDraft() {
   }
 }
 
-onMounted(loadContent)
+onMounted(async () => {
+  await Promise.all([loadDepartments(), loadContent()])
+})
 </script>
 
 <template>
@@ -184,6 +217,22 @@ onMounted(loadContent)
             <option value="full">全量级</option>
           </select>
         </label>
+        <label>
+          <span>可见范围</span>
+          <select v-model="form.scope_type" @change="onScopeTypeChange">
+            <option value="global">全公司通用</option>
+            <option value="department">限定部门</option>
+          </select>
+        </label>
+        <label v-if="form.scope_type === 'department'">
+          <span>限定部门</span>
+          <select v-model.number="form.department_id">
+            <option :value="null">请选择部门</option>
+            <option v-for="department in departments" :key="department.id" :value="department.id">
+              {{ department.name }}
+            </option>
+          </select>
+        </label>
         <label class="admin-form__wide">
           <span>摘要</span>
           <textarea v-model.trim="form.summary" rows="3" />
@@ -219,11 +268,7 @@ onMounted(loadContent)
           </label>
           <label class="admin-form__wide">
             <span>调整要点</span>
-            <textarea
-              v-model.trim="form.adjustment_points"
-              rows="4"
-              placeholder="每行一个调整要点"
-            />
+            <textarea v-model.trim="form.adjustment_points" rows="4" placeholder="每行一个调整要点" />
           </label>
         </template>
 

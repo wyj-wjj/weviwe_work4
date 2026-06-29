@@ -21,7 +21,7 @@ from app.integrations.dashscope import normalize_provider_error
 from app.models.content import Content, ContentVersion
 from app.models.quiz import QuizGenerationBatch, QuizQuestion, QuizQuestionSetItem, QuizSet
 from app.models.user import User
-from app.services.content_service import visible_levels_for
+from app.services.permission_service import scope_filter, scope_is_visible, visible_levels_for
 
 
 QUIZ_GENERATION_PROMPT_VERSION = "quiz-generation-v1"
@@ -44,6 +44,7 @@ def visible_related_content(question: QuizQuestion, user: User) -> Content | Non
         or content.status != ContentStatus.PUBLISHED.value
         or content.current_version_id is None
         or content.permission_level not in visible_levels_for(user)
+        or not scope_is_visible(user, content.scope_type, content.department_id)
     ):
         return None
     if question.related_version_id is not None and question.related_version_id != content.current_version_id:
@@ -253,6 +254,7 @@ def _load_employee_quiz_questions(
     *,
     permission_level: ContentLevel,
     visible_content_levels: set[str],
+    user: User,
     limit: int,
     offset: int = 0,
 ) -> list[QuizQuestion]:
@@ -266,7 +268,7 @@ def _load_employee_quiz_questions(
         .where(QuizQuestion.needs_review.is_(False))
         .where(QuizQuestion.permission_level == permission_level.value)
         .where(or_(QuizQuestion.expires_at.is_(None), QuizQuestion.expires_at > now))
-        .where(visible_related_content_filter(visible_content_levels))
+        .where(visible_related_content_filter(visible_content_levels, user))
         .order_by(QuizQuestion.priority.desc(), QuizQuestion.id.asc())
         .limit(limit)
     )
@@ -275,7 +277,7 @@ def _load_employee_quiz_questions(
     return list(db.scalars(stmt).all())
 
 
-def visible_related_content_filter(visible_content_levels: set[str]):
+def visible_related_content_filter(visible_content_levels: set[str], user: User):
     return or_(
         QuizQuestion.related_content_id.is_(None),
         and_(
@@ -283,6 +285,7 @@ def visible_related_content_filter(visible_content_levels: set[str]):
             Content.status == ContentStatus.PUBLISHED.value,
             Content.current_version_id.is_not(None),
             Content.permission_level.in_(visible_content_levels),
+            scope_filter(user, Content),
             or_(
                 QuizQuestion.related_version_id.is_(None),
                 QuizQuestion.related_version_id == Content.current_version_id,
@@ -298,6 +301,7 @@ def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
             db,
             permission_level=ContentLevel.GENERAL,
             visible_content_levels=user_visible_content_levels,
+            user=user,
             limit=10,
         )
 
@@ -305,12 +309,14 @@ def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
         db,
         permission_level=ContentLevel.FULL,
         visible_content_levels=user_visible_content_levels,
+        user=user,
         limit=1,
     )
     general_items = _load_employee_quiz_questions(
         db,
         permission_level=ContentLevel.GENERAL,
         visible_content_levels=user_visible_content_levels,
+        user=user,
         limit=9 if reserved_full else 10,
     )
     selected = reserved_full + general_items
@@ -320,6 +326,7 @@ def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
                 db,
                 permission_level=ContentLevel.FULL,
                 visible_content_levels=user_visible_content_levels,
+                user=user,
                 limit=10 - len(selected),
                 offset=1,
             )
@@ -346,7 +353,7 @@ def get_employee_quiz_questions_by_ids(
         .where(QuizQuestion.needs_review.is_(False))
         .where(or_(QuizQuestion.expires_at.is_(None), QuizQuestion.expires_at > datetime.now(UTC)))
         .where(QuizQuestion.permission_level.in_(visible_levels_for(user)))
-        .where(visible_related_content_filter(visible_levels_for(user)))
+        .where(visible_related_content_filter(visible_levels_for(user), user))
     )
     questions = list(db.scalars(stmt).all())
     if len(questions) != len(requested_ids):

@@ -5,9 +5,11 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.domain.enums import ContentLevel, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
+from app.domain.enums import ContentScope, ContentStatus, ContentType, IndexStatus, QuizAction, UpdateLevel
 from app.models.content import Content, ContentChunk, ContentVersion
 from app.models.user import User
+from app.services.department_service import ensure_active_department
+from app.services.permission_service import scope_filter, visible_levels_for
 
 
 def not_found(message: str = "资源不存在。") -> AppError:
@@ -23,6 +25,9 @@ def content_to_admin_dict(content: Content) -> dict[str, Any]:
         "title": content.title,
         "category": content.category,
         "permission_level": content.permission_level,
+        "scope_type": content.scope_type,
+        "department_id": content.department_id,
+        "department_name": content.department.name if content.department else None,
         "status": content.status,
         "current_version_id": content.current_version_id,
         "current_version_no": current_version_no,
@@ -34,12 +39,29 @@ def content_to_admin_dict(content: Content) -> dict[str, Any]:
     }
 
 
+def validate_content_scope(db: Session, *, scope_type: str, department_id: int | None) -> None:
+    if scope_type == ContentScope.GLOBAL.value:
+        if department_id is not None:
+            raise AppError(code="invalid_content_scope", message="全公司通用内容不能设置部门。", status_code=422)
+        return
+    if scope_type != ContentScope.DEPARTMENT.value:
+        raise AppError(code="invalid_content_scope", message="内容可见范围不合法。", status_code=422)
+    if department_id is None:
+        raise AppError(code="invalid_content_scope", message="限定部门内容必须选择部门。", status_code=422)
+    ensure_active_department(db, department_id)
+
+
 def create_content(db: Session, *, creator: User, payload: Any) -> Content:
+    scope_type = payload.scope_type.value
+    department_id = payload.department_id
+    validate_content_scope(db, scope_type=scope_type, department_id=department_id)
     content = Content(
         content_type=payload.content_type.value,
         title=payload.title,
         category=payload.category,
         permission_level=payload.permission_level.value,
+        scope_type=scope_type,
+        department_id=department_id,
         status=ContentStatus.DRAFT.value,
         index_status=IndexStatus.NOT_SYNCED.value,
         draft_summary=payload.summary,
@@ -72,6 +94,14 @@ def update_content(db: Session, *, content_id: int, payload: Any) -> Content:
         stored_updates["category"] = updates["category"]
     if "permission_level" in updates and updates["permission_level"] is not None:
         stored_updates["permission_level"] = updates["permission_level"].value
+    if "scope_type" in updates or "department_id" in updates:
+        next_scope_type = enum_value(updates.get("scope_type")) or content.scope_type
+        next_department_id = updates["department_id"] if "department_id" in updates else content.department_id
+        if next_scope_type == ContentScope.GLOBAL.value and "department_id" not in updates:
+            next_department_id = None
+        validate_content_scope(db, scope_type=next_scope_type, department_id=next_department_id)
+        stored_updates["scope_type"] = next_scope_type
+        stored_updates["department_id"] = next_department_id
     if "summary" in updates:
         stored_updates["draft_summary"] = updates["summary"]
     if "body" in updates and updates["body"] is not None:
@@ -216,6 +246,8 @@ def publish_content(
         body=content.draft_body,
         structured_payload=content.draft_payload,
         permission_level=content.permission_level,
+        scope_type=content.scope_type,
+        department_id=content.department_id,
         update_level=update_level_value,
         change_summary=change_summary,
         quiz_action=quiz_action_value,
@@ -287,18 +319,13 @@ def list_ai_searchable_chunks(db: Session) -> list[ContentChunk]:
     return list(db.scalars(stmt).all())
 
 
-def visible_levels_for(user: User) -> set[str]:
-    if user.account_type in {"admin", "full_user"}:
-        return {ContentLevel.GENERAL.value, ContentLevel.FULL.value}
-    return {ContentLevel.GENERAL.value}
-
-
 def employee_content_query(user: User) -> Select[tuple[Content]]:
     return (
         select(Content)
         .join(ContentVersion, Content.current_version_id == ContentVersion.id)
         .where(Content.status == ContentStatus.PUBLISHED.value)
         .where(Content.permission_level.in_(visible_levels_for(user)))
+        .where(scope_filter(user, Content))
     )
 
 

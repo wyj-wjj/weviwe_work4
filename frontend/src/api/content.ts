@@ -6,6 +6,9 @@ export interface MustReadItem {
   published_at: string
   effective_at: string
   permission_level: 'general' | 'full'
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   update_level: 'minor' | 'medium' | 'major'
   update_body: string
   adjustment_points: string[]
@@ -21,6 +24,9 @@ export interface BaseScriptItem {
   title: string
   category: string | null
   permission_level: 'general' | 'full'
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   update_level: 'minor' | 'medium' | 'major'
   updated_at: string
   summary_points: string[]
@@ -32,6 +38,9 @@ export interface StandardScriptItem {
   title: string
   category: string | null
   permission_level: 'general' | 'full'
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   update_level: 'minor' | 'medium' | 'major'
   updated_at: string
   scene: string | null

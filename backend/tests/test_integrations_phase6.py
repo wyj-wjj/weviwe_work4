@@ -136,6 +136,131 @@ def test_fake_milvus_scores_vectors_by_cosine_similarity() -> None:
     assert results[1].score == pytest.approx(-1.0)
 
 
+class StubMilvusClient:
+    def __init__(self, field_names: set[str]) -> None:
+        self.field_names = field_names
+        self.upserted_data: list[dict] = []
+        self.search_filters: list[str] = []
+        self.search_output_fields: list[list[str]] = []
+
+    def has_collection(self, collection_name: str) -> bool:
+        return True
+
+    def describe_collection(self, collection_name: str) -> dict:
+        return {"fields": [{"name": field_name} for field_name in self.field_names]}
+
+    def upsert(self, *, collection_name: str, data: list[dict]) -> None:
+        self.upserted_data = data
+
+    def flush(self, collection_name: str) -> None:
+        return None
+
+    def load_collection(self, collection_name: str) -> None:
+        return None
+
+    def search(
+        self,
+        *,
+        collection_name: str,
+        data: list[list[float]],
+        filter: str,
+        limit: int,
+        output_fields: list[str],
+        search_params: dict,
+    ) -> list[list[dict]]:
+        self.search_filters.append(filter)
+        self.search_output_fields.append(output_fields)
+        return [[]]
+
+
+def make_real_milvus_with_stub(stub: StubMilvusClient) -> RealMilvusClient:
+    client = object.__new__(RealMilvusClient)
+    client.host = "127.0.0.1"
+    client.port = 19530
+    client.uri = "http://127.0.0.1:19530"
+    client.client = stub
+    client._field_cache = {}
+    return client
+
+
+def test_real_milvus_legacy_schema_skips_department_scope_fields() -> None:
+    stub = StubMilvusClient(field_names=set(RealMilvusClient._LEGACY_FIELD_NAMES))
+    client = make_real_milvus_with_stub(stub)
+
+    client.upsert_vectors(
+        "legacy_collection",
+        [
+            MilvusVector(
+                primary_key="chunk-1",
+                vector=[0.1, 0.2, 0.3],
+                metadata={
+                    "content_id": 1,
+                    "version_id": 1,
+                    "chunk_id": 1,
+                    "permission_level": "general",
+                    "scope_type": "department",
+                    "department_id": 3,
+                    "content_status": "published",
+                    "is_active": True,
+                },
+            )
+        ],
+    )
+    client.search(
+        "legacy_collection",
+        query_vector=[0.1, 0.2, 0.3],
+        allowed_permission_levels={"general"},
+        visible_department_id=3,
+        top_k=5,
+    )
+
+    assert "scope_type" not in stub.upserted_data[0]
+    assert "department_id" not in stub.upserted_data[0]
+    assert "scope_type" not in stub.search_filters[-1]
+    assert "department_id" not in stub.search_filters[-1]
+    assert "scope_type" not in stub.search_output_fields[-1]
+    assert "department_id" not in stub.search_output_fields[-1]
+
+
+def test_real_milvus_scoped_schema_filters_by_department_scope() -> None:
+    stub = StubMilvusClient(field_names=set(RealMilvusClient._LEGACY_FIELD_NAMES | RealMilvusClient._SCOPE_FIELD_NAMES))
+    client = make_real_milvus_with_stub(stub)
+
+    client.upsert_vectors(
+        "scoped_collection",
+        [
+            MilvusVector(
+                primary_key="chunk-1",
+                vector=[0.1, 0.2, 0.3],
+                metadata={
+                    "content_id": 1,
+                    "version_id": 1,
+                    "chunk_id": 1,
+                    "permission_level": "general",
+                    "scope_type": "department",
+                    "department_id": 3,
+                    "content_status": "published",
+                    "is_active": True,
+                },
+            )
+        ],
+    )
+    client.search(
+        "scoped_collection",
+        query_vector=[0.1, 0.2, 0.3],
+        allowed_permission_levels={"general"},
+        visible_department_id=3,
+        top_k=5,
+    )
+
+    assert stub.upserted_data[0]["scope_type"] == "department"
+    assert stub.upserted_data[0]["department_id"] == 3
+    assert 'scope_type == "global"' in stub.search_filters[-1]
+    assert "department_id == 3" in stub.search_filters[-1]
+    assert "scope_type" in stub.search_output_fields[-1]
+    assert "department_id" in stub.search_output_fields[-1]
+
+
 def test_milvus_factory_uses_real_client_only_when_fake_clients_are_disabled() -> None:
     fake_settings = Settings(use_fake_external_clients=True)
     real_settings = Settings(use_fake_external_clients=False, milvus_host="127.0.0.1", milvus_port=19530)

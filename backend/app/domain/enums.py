@@ -12,6 +12,11 @@ class ContentLevel(StrEnum):
     FULL = "full"
 
 
+class ContentScope(StrEnum):
+    GLOBAL = "global"
+    DEPARTMENT = "department"
+
+
 class ContentType(StrEnum):
     BASE_SCRIPT = "base_script"
     STANDARD_SCRIPT = "standard_script"

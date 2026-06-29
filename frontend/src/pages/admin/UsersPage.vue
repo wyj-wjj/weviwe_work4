@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 
+import { listAdminDepartments, type Department } from '../../api/admin-departments'
 import {
   createAdminUser,
   disableAdminUser,
@@ -18,6 +19,7 @@ import { formatDateTime, permissionLabel } from '../../utils/format'
 
 const auth = useAuthStore()
 const items = ref<AdminUser[]>([])
+const departments = ref<Department[]>([])
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
@@ -32,6 +34,7 @@ const form = reactive({
   display_name: '',
   account_type: 'general_user',
   content_level: 'general',
+  department_id: null as number | null,
   is_active: true,
 })
 
@@ -54,6 +57,11 @@ async function loadUsers() {
   }
 }
 
+async function loadDepartments() {
+  const response = await listAdminDepartments(false)
+  departments.value = response.items
+}
+
 function resetEditor() {
   editingId.value = null
   form.username = ''
@@ -61,6 +69,7 @@ function resetEditor() {
   form.display_name = ''
   form.account_type = 'general_user'
   form.content_level = 'general'
+  form.department_id = null
   form.is_active = true
   error.value = ''
 }
@@ -77,6 +86,7 @@ function startEdit(user: AdminUser) {
   form.display_name = user.display_name
   form.account_type = user.account_type
   form.content_level = user.content_level
+  form.department_id = user.department_id
   form.is_active = user.is_active
   error.value = ''
   showEditor.value = true
@@ -103,12 +113,16 @@ async function saveUser() {
   }
   try {
     if (editingId.value) {
-      await updateAdminUser(editingId.value, {
+      const payload = {
         display_name: form.display_name,
         account_type: form.account_type as AdminUser['account_type'],
         content_level: form.content_level as AdminUser['content_level'],
         is_active: form.is_active,
-      })
+      } as Parameters<typeof updateAdminUser>[1]
+      if (form.department_id !== null) {
+        payload.department_id = form.department_id
+      }
+      await updateAdminUser(editingId.value, payload)
     } else {
       const payload: AdminUserCreatePayload = {
         username: form.username,
@@ -117,6 +131,9 @@ async function saveUser() {
         account_type: form.account_type as AdminUser['account_type'],
         content_level: form.content_level as AdminUser['content_level'],
       }
+      if (form.department_id !== null) {
+        payload.department_id = form.department_id
+      }
       await createAdminUser(payload)
     }
     message.value = '账号已保存'
@@ -124,7 +141,7 @@ async function saveUser() {
     resetEditor()
     await loadUsers()
   } catch {
-    error.value = '账号保存失败，请检查用户名是否重复'
+    error.value = '账号保存失败，请检查用户名是否重复或部门是否可用'
   }
 }
 
@@ -178,7 +195,9 @@ async function enable(user: AdminUser) {
   }
 }
 
-onMounted(loadUsers)
+onMounted(async () => {
+  await Promise.all([loadUsers(), loadDepartments()])
+})
 </script>
 
 <template>
@@ -223,6 +242,15 @@ onMounted(loadUsers)
             <option value="full">全量级</option>
           </select>
         </label>
+        <label>
+          <span>归属部门</span>
+          <select v-model.number="form.department_id">
+            <option :value="null">未分配（仅可看全公司通用）</option>
+            <option v-for="department in departments" :key="department.id" :value="department.id">
+              {{ department.name }}
+            </option>
+          </select>
+        </label>
         <label v-if="editingId" class="admin-checkbox">
           <input v-model="form.is_active" type="checkbox" />
           <span>账号启用</span>
@@ -234,11 +262,7 @@ onMounted(loadUsers)
         </div>
       </form>
 
-      <form
-        v-if="resetUserId"
-        class="admin-reset-panel"
-        @submit.prevent="confirmReset"
-      >
+      <form v-if="resetUserId" class="admin-reset-panel" @submit.prevent="confirmReset">
         <label>
           <span>新密码</span>
           <input v-model="resetPassword" type="password" />
@@ -258,6 +282,7 @@ onMounted(loadUsers)
               <th>展示名</th>
               <th>账号类型</th>
               <th>内容权限</th>
+              <th>归属部门</th>
               <th>状态</th>
               <th>更新时间</th>
               <th>操作</th>
@@ -269,24 +294,17 @@ onMounted(loadUsers)
               <td>{{ user.display_name }}</td>
               <td>{{ accountLabels[user.account_type] }}</td>
               <td>{{ permissionLabel(user.content_level) }}</td>
+              <td>{{ user.department_name || '未分配' }}</td>
               <td>{{ user.is_active ? '启用' : '禁用' }}</td>
               <td>{{ formatDateTime(user.updated_at) }}</td>
               <td>
                 <div v-if="user.account_type !== 'admin'" class="admin-actions">
                   <button type="button" @click="startEdit(user)">编辑</button>
                   <button type="button" @click="startReset(user)">重置密码</button>
-                  <button
-                    v-if="user.is_active && user.id !== auth.user?.id"
-                    type="button"
-                    @click="disable(user)"
-                  >
+                  <button v-if="user.is_active && user.id !== auth.user?.id" type="button" @click="disable(user)">
                     禁用账号
                   </button>
-                  <button
-                    v-else-if="!user.is_active"
-                    type="button"
-                    @click="enable(user)"
-                  >
+                  <button v-else-if="!user.is_active" type="button" @click="enable(user)">
                     启用账号
                   </button>
                 </div>

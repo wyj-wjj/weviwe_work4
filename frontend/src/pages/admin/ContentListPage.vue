@@ -12,7 +12,7 @@ import {
 } from '../../api/admin-content'
 import AdminLayout from '../../components/AdminLayout.vue'
 import AppState from '../../components/AppState.vue'
-import { contentTypeLabel, permissionLabel, updateLevelLabel } from '../../utils/format'
+import { adminScopeLabel, contentTypeLabel, permissionLabel, updateLevelLabel } from '../../utils/format'
 
 const items = ref<AdminContent[]>([])
 const total = ref(0)
@@ -135,13 +135,22 @@ function isPublishConfirmed(item: AdminContent) {
 }
 
 function publishConfirmation(item: AdminContent) {
-  const audience = item.permission_level === 'full' ? '管理员和完整权限员工' : '全部员工'
+  const scope = adminScopeLabel(item.scope_type, item.department_name)
+  const audience =
+    item.scope_type === 'department'
+      ? item.permission_level === 'full'
+        ? '该部门全量员工和管理员'
+        : '该部门所有员工和管理员'
+      : item.permission_level === 'full'
+        ? '全公司全量员工和管理员'
+        : '全公司所有员工和管理员'
   const replaceText = item.current_version_id ? '本次发布会替换当前版本。' : '本次将生成首个正式版本。'
   return [
     `标题：${item.title}`,
     `内容类型：${contentTypeLabel(item.content_type)}`,
+    `可见范围：${scope}`,
     `权限级别：${permissionLabel(item.permission_level)}`,
-    `可见受众：${audience}`,
+    `发布后影响范围：${audience}`,
     replaceText,
   ].join('\n')
 }
@@ -286,6 +295,7 @@ onMounted(loadContents)
             <tr>
               <th>标题</th>
               <th>类型 / 分类</th>
+              <th>可见范围</th>
               <th>权限</th>
               <th>状态</th>
               <th>版本</th>
@@ -298,6 +308,7 @@ onMounted(loadContents)
             <tr v-for="item in items" :key="item.id">
               <td>{{ item.title }}</td>
               <td>{{ contentTypeLabel(item.content_type) }} / {{ item.category || '-' }}</td>
+              <td>{{ adminScopeLabel(item.scope_type, item.department_name) }}</td>
               <td>{{ permissionLabel(item.permission_level) }}</td>
               <td>{{ statusLabels[item.status] }}</td>
               <td>{{ item.current_version_no ? `v${item.current_version_no}` : '-' }}</td>

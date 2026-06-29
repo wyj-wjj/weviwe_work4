@@ -6,6 +6,9 @@ export interface RagSource {
   chunk_id: number
   title: string
   content_type: string
+  scope_type?: 'global' | 'department'
+  department_id?: number | null
+  department_name?: string | null
   updated_at: string
   update_level: 'minor' | 'medium' | 'major'
   relevance_score: number

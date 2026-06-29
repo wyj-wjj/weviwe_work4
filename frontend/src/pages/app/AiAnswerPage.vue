@@ -6,7 +6,7 @@ import { askRag, type RagAnswerResponse } from '../../api/rag'
 import AppState from '../../components/AppState.vue'
 import CopyButton from '../../components/CopyButton.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
-import { contentTypeLabel, formatDateTime, sourceDetailPath, updateLevelLabel } from '../../utils/format'
+import { contentTypeLabel, formatDateTime, scopeLabel, sourceDetailPath, updateLevelLabel } from '../../utils/format'
 
 const route = useRoute()
 const answer = ref<RagAnswerResponse | null>(null)
@@ -100,6 +100,7 @@ onBeforeUnmount(() => {
               <span>{{ contentTypeLabel(source.content_type) }}</span>
               <span>更新时间：{{ formatDateTime(source.updated_at) }}</span>
               <span>更新级别：{{ updateLevelLabel(source.update_level) }}</span>
+              <span>可见范围：{{ scopeLabel(source.scope_type) }}</span>
               <a :href="sourceDetailPath(source.content_type, source.content_id)">查看来源</a>
             </article>
           </div>

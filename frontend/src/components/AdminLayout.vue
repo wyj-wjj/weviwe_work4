@@ -19,6 +19,7 @@ function logout() {
       <nav aria-label="后台导航">
         <RouterLink to="/admin/contents">内容管理</RouterLink>
         <RouterLink to="/admin/quiz-questions">测验题管理</RouterLink>
+        <RouterLink to="/admin/departments">部门管理</RouterLink>
         <RouterLink to="/admin/users">账号管理</RouterLink>
         <RouterLink to="/admin/missed-questions">未命中问题</RouterLink>
       </nav>

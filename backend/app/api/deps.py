@@ -8,10 +8,11 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.security import decode_access_token
 from app.db.session import get_db
-from app.domain.enums import AccountType, ContentLevel
+from app.domain.enums import AccountType
 from app.integrations.dashscope import create_dashscope_client
 from app.integrations.milvus import create_milvus_client
 from app.models.user import User
+from app.services.permission_service import scope_is_visible, visible_levels_for
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -46,13 +47,21 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 
 def permitted_content_levels(user: User) -> set[str]:
-    if user.account_type in {AccountType.ADMIN.value, AccountType.FULL_USER.value}:
-        return {ContentLevel.GENERAL.value, ContentLevel.FULL.value}
-    return {ContentLevel.GENERAL.value}
+    return visible_levels_for(user)
 
 
-def ensure_content_visible(user: User, permission_level: str) -> None:
-    if permission_level not in permitted_content_levels(user):
+def ensure_content_visible(
+    user: User,
+    permission_level: str,
+    *,
+    scope_type: str = "global",
+    department_id: int | None = None,
+) -> None:
+    if permission_level not in permitted_content_levels(user) or not scope_is_visible(
+        user,
+        scope_type,
+        department_id,
+    ):
         raise AppError(code="permission_denied", message="无权查看该内容", status_code=403)
 
 

@@ -9,6 +9,7 @@ import AdminHomePage from '../pages/AdminHomePage.vue'
 import ContentEditorPage from '../pages/admin/ContentEditorPage.vue'
 import ContentHistoryPage from '../pages/admin/ContentHistoryPage.vue'
 import ContentListPage from '../pages/admin/ContentListPage.vue'
+import DepartmentsPage from '../pages/admin/DepartmentsPage.vue'
 import MissedQuestionsPage from '../pages/admin/MissedQuestionsPage.vue'
 import QuizQuestionsPage from '../pages/admin/QuizQuestionsPage.vue'
 import UsersPage from '../pages/admin/UsersPage.vue'
@@ -79,6 +80,12 @@ export const routes: RouteRecordRaw[] = [
     path: '/admin',
     name: 'admin-home',
     component: AdminHomePage,
+    meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/admin/departments',
+    name: 'admin-departments',
+    component: DepartmentsPage,
     meta: { area: 'admin', requiresAuth: true, requiresAdmin: true },
   },
   {

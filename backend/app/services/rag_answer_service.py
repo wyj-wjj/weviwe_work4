@@ -10,7 +10,7 @@ from app.integrations.dashscope import normalize_provider_error
 from app.integrations.milvus import MilvusSearchHit
 from app.models.content import Content, ContentChunk, ContentVersion
 from app.models.user import User
-from app.services.content_service import visible_levels_for
+from app.services.permission_service import can_view_all_department_scopes, scope_filter, scope_is_visible, visible_levels_for
 from app.services.missed_question_service import record_missed_question
 
 
@@ -143,6 +143,8 @@ def keyword_search_hits(
         .where(Content.current_version_id == ContentChunk.version_id)
         .where(Content.permission_level.in_(allowed_levels))
         .where(ContentChunk.permission_level.in_(allowed_levels))
+        .where(scope_filter(user, Content))
+        .where(scope_filter(user, ContentChunk))
         .where(ContentChunk.is_active.is_(True))
         .where(or_(*term_conditions))
         .order_by(ContentChunk.id.asc())
@@ -162,6 +164,8 @@ def keyword_search_hits(
                     "version_id": chunk.version_id,
                     "chunk_id": chunk.id,
                     "permission_level": chunk.permission_level,
+                    "scope_type": chunk.scope_type,
+                    "department_id": chunk.department_id,
                     "is_active": chunk.is_active,
                     "retrieval_path": "keyword",
                 },
@@ -204,6 +208,9 @@ def source_from_chunk(chunk: ContentChunk, *, relevance_score: float) -> dict[st
         "chunk_id": chunk.id,
         "title": version.title,
         "content_type": content.content_type,
+        "scope_type": content.scope_type,
+        "department_id": content.department_id,
+        "department_name": content.department.name if content.department else None,
         "updated_at": version.published_at,
         "update_level": version.update_level,
         "relevance_score": relevance_score,
@@ -238,6 +245,8 @@ def load_authorized_contexts(
             or content.current_version_id != chunk.version_id
             or content.permission_level not in allowed_levels
             or chunk.permission_level not in allowed_levels
+            or not scope_is_visible(user, content.scope_type, content.department_id)
+            or not scope_is_visible(user, chunk.scope_type, chunk.department_id)
         ):
             continue
         if best_authorized_score is None:
@@ -304,6 +313,8 @@ def answer_question(
             resolved_settings.milvus_collection_name,
             query_vector=question_embedding.vector,
             allowed_permission_levels=visible_levels_for(user),
+            visible_department_id=user.department_id,
+            include_all_department_scoped=can_view_all_department_scopes(user),
             top_k=resolved_settings.rag_top_k,
         )
     except Exception as exc:

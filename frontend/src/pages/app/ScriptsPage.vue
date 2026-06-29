@@ -5,7 +5,7 @@ import { RouterLink } from 'vue-router'
 import { listScripts, type BaseScriptItem, type StandardScriptItem } from '../../api/content'
 import AppState from '../../components/AppState.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
-import { formatDateTime, permissionLabel, updateLevelLabel } from '../../utils/format'
+import { formatDateTime, permissionLabel, scopeLabel, updateLevelLabel } from '../../utils/format'
 
 const baseScripts = ref<BaseScriptItem[]>([])
 const standardScripts = ref<StandardScriptItem[]>([])
@@ -79,6 +79,7 @@ onMounted(loadScripts)
               <span v-for="point in item.summary_points" :key="point">{{ point }}</span>
               <small>更新时间：{{ formatDateTime(item.updated_at) }}</small>
               <small>更新级别：{{ updateLevelLabel(item.update_level) }}</small>
+              <small>可见范围：{{ scopeLabel(item.scope_type) }}</small>
               <em>{{ permissionLabel(item.permission_level) }}</em>
             </RouterLink>
           </div>
@@ -98,6 +99,7 @@ onMounted(loadScripts)
               <span>{{ item.recommended_speech_summary }}</span>
               <small>更新时间：{{ formatDateTime(item.updated_at) }}</small>
               <small>更新级别：{{ updateLevelLabel(item.update_level) }}</small>
+              <small>可见范围：{{ scopeLabel(item.scope_type) }}</small>
               <em>{{ permissionLabel(item.permission_level) }}</em>
             </RouterLink>
           </div>

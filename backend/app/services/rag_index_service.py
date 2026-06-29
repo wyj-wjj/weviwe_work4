@@ -157,6 +157,8 @@ def replace_chunks_for_version(db: Session, *, content: Content, version: Conten
             token_estimate=max(1, len(spec.text) // 2),
             content_hash=stable_content_hash(spec.text),
             permission_level=content.permission_level,
+            scope_type=content.scope_type,
+            department_id=content.department_id,
             is_active=True,
         )
         db.add(chunk)
@@ -213,6 +215,8 @@ def sync_content_index(
                 "version_id": chunk.version_id,
                 "chunk_id": chunk.id,
                 "permission_level": chunk.permission_level,
+                "scope_type": chunk.scope_type,
+                "department_id": chunk.department_id,
                 "content_status": content.status,
                 "is_active": True,
                 "effective_at": content.current_version.effective_at.isoformat() if content.current_version and content.current_version.effective_at else None,

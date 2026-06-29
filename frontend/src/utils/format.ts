@@ -9,6 +9,17 @@ export function permissionLabel(value: string): string {
   return value === 'full' ? '全量级' : '通用级'
 }
 
+export function scopeLabel(scopeType: string | null | undefined): string {
+  return scopeType === 'department' ? '本部门' : '全公司通用'
+}
+
+export function adminScopeLabel(scopeType: string | null | undefined, departmentName?: string | null): string {
+  if (scopeType === 'department') {
+    return departmentName ? `限定部门：${departmentName}` : '限定部门'
+  }
+  return '全公司通用'
+}
+
 export function updateLevelLabel(value: string | null | undefined): string {
   if (value === 'minor') {
     return '小更新'

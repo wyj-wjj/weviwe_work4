@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import { getMustRead, type MustReadItem } from '../../api/content'
 import AppState from '../../components/AppState.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
-import { formatDateTime, permissionLabel, updateLevelLabel } from '../../utils/format'
+import { formatDateTime, permissionLabel, scopeLabel, updateLevelLabel } from '../../utils/format'
 
 const route = useRoute()
 const item = ref<MustReadItem | null>(null)
@@ -37,6 +37,7 @@ onMounted(async () => {
           <span>发布时间：{{ formatDateTime(item.published_at) }}</span>
           <span>生效时间：{{ formatDateTime(item.effective_at) }}</span>
           <span>更新级别：{{ updateLevelLabel(item.update_level) }}</span>
+          <span>可见范围：{{ scopeLabel(item.scope_type) }}</span>
           <strong>{{ permissionLabel(item.permission_level) }}</strong>
         </p>
       </header>

@@ -9,6 +9,8 @@ export interface AuthUser {
   display_name: string
   account_type: AccountType
   content_level: ContentLevel
+  department_id?: number | null
+  department_name?: string | null
 }
 
 interface StoredAuthSession {

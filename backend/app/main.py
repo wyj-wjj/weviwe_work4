@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import admin, auth, content, missed_question, quiz, rag, user
+from app.api.routes import admin, auth, content, department, missed_question, quiz, rag, user
 from app.core.config import Settings
 from app.core.errors import register_exception_handlers
 
@@ -12,6 +12,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(admin.router)
     app.include_router(content.router)
+    app.include_router(department.router)
     app.include_router(quiz.router)
     app.include_router(rag.router)
     app.include_router(missed_question.router)

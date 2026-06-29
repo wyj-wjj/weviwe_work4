@@ -158,6 +158,9 @@ def admin_list_versions(
                 "created_by": version.created_by,
                 "created_by_name": version.creator.display_name if version.creator else None,
                 "permission_level": version.permission_level,
+                "scope_type": version.scope_type,
+                "department_id": version.department_id,
+                "department_name": version.department.name if version.department else None,
                 "update_level": version.update_level,
                 "change_summary": version.change_summary,
                 "quiz_action": version.quiz_action,
@@ -178,6 +181,9 @@ def must_read_item(content: Content) -> dict[str, Any]:
         "published_at": version.published_at,
         "effective_at": version.effective_at,
         "permission_level": content.permission_level,
+        "scope_type": content.scope_type,
+        "department_id": content.department_id,
+        "department_name": content.department.name if content.department else None,
         "update_level": version.update_level,
         "update_body": payload.get("update_body", version.body),
         "adjustment_points": payload.get("adjustment_points", []),
@@ -207,7 +213,12 @@ def app_get_must_read(
     content = get_content_or_404(db, content_id)
     if content.status != ContentStatus.PUBLISHED.value or content.content_type != ContentType.MUST_READ.value:
         raise AppError(code="not_found", message="Content not found.", status_code=404)
-    ensure_content_visible(current_user, content.permission_level)
+    ensure_content_visible(
+        current_user,
+        content.permission_level,
+        scope_type=content.scope_type,
+        department_id=content.department_id,
+    )
     return must_read_item(content)
 
 
@@ -221,6 +232,9 @@ def script_item(content: Content) -> dict[str, Any]:
             "title": version.title,
             "category": content.category,
             "permission_level": content.permission_level,
+            "scope_type": content.scope_type,
+            "department_id": content.department_id,
+            "department_name": content.department.name if content.department else None,
             "update_level": version.update_level,
             "updated_at": version.published_at,
             "scene": payload.get("scene"),
@@ -232,6 +246,9 @@ def script_item(content: Content) -> dict[str, Any]:
         "title": version.title,
         "category": content.category,
         "permission_level": content.permission_level,
+        "scope_type": content.scope_type,
+        "department_id": content.department_id,
+        "department_name": content.department.name if content.department else None,
         "update_level": version.update_level,
         "updated_at": version.published_at,
         "summary_points": (payload.get("points") or [])[:5],
@@ -268,7 +285,12 @@ def app_get_script(
         ContentType.STANDARD_SCRIPT.value,
     }:
         raise AppError(code="not_found", message="Content not found.", status_code=404)
-    ensure_content_visible(current_user, content.permission_level)
+    ensure_content_visible(
+        current_user,
+        content.permission_level,
+        scope_type=content.scope_type,
+        department_id=content.department_id,
+    )
     version = version_payload(content)
     payload = version.structured_payload or {}
     if content.content_type == ContentType.STANDARD_SCRIPT.value:
@@ -288,6 +310,9 @@ def app_get_script(
             "content_type": content.content_type,
             "category": content.category,
             "permission_level": content.permission_level,
+            "scope_type": content.scope_type,
+            "department_id": content.department_id,
+            "department_name": content.department.name if content.department else None,
             "update_level": version.update_level,
             "scene": payload.get("scene"),
             "recommended_speech": payload.get("recommended_speech"),
@@ -302,6 +327,9 @@ def app_get_script(
         "content_type": content.content_type,
         "category": content.category,
         "permission_level": content.permission_level,
+        "scope_type": content.scope_type,
+        "department_id": content.department_id,
+        "department_name": content.department.name if content.department else None,
         "update_level": version.update_level,
         "body": version.body,
         "summary_points": payload.get("points", []),

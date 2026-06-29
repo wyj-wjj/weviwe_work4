@@ -9,6 +9,7 @@ class UserCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     account_type: AccountType
     content_level: ContentLevel
+    department_id: int | None = None
 
     @model_validator(mode="after")
     def validate_role_level(self) -> "UserCreate":
@@ -24,6 +25,7 @@ class UserUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=128)
     account_type: AccountType | None = None
     content_level: ContentLevel | None = None
+    department_id: int | None = None
     is_active: bool | None = None
 
 
@@ -37,3 +39,5 @@ class UserPublic(BaseModel):
     display_name: str
     account_type: str
     content_level: str
+    department_id: int | None = None
+    department_name: str | None = None
