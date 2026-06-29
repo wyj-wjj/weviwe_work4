@@ -65,43 +65,52 @@ beforeEach(() => {
 })
 
 test('admin content list filters, paginates, gates actions, and labels every index state', async () => {
-  const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
-    data: {
-      items: [
-        contentItem(),
-        contentItem({
-          id: 2,
-          title: '已发布话术',
-          status: 'published',
-          current_version_id: 2,
-          current_version_no: 1,
-          current_update_level: 'medium',
-          index_status: 'synced',
-        }),
-        contentItem({
-          id: 3,
-          title: '失败话术',
-          status: 'published',
-          current_version_id: 3,
-          current_version_no: 1,
-          index_status: 'failed',
-        }),
-        contentItem({
-          id: 4,
-          title: '同步中话术',
-          status: 'published',
-          current_version_id: 4,
-          current_version_no: 1,
-          index_status: 'syncing',
-        }),
-      ],
-      total: 41,
-      page: 1,
-      page_size: 20,
-    },
+  const get = vi.spyOn(apiClient, 'get').mockImplementation(async (url: string) => {
+    if (url === '/admin/content-categories') {
+      return {
+        data: {
+          items: ['回款催收'],
+        },
+      }
+    }
+    return {
+      data: {
+        items: [
+          contentItem(),
+          contentItem({
+            id: 2,
+            title: '已发布话术',
+            status: 'published',
+            current_version_id: 2,
+            current_version_no: 1,
+            current_update_level: 'medium',
+            index_status: 'synced',
+          }),
+          contentItem({
+            id: 3,
+            title: '失败话术',
+            status: 'published',
+            current_version_id: 3,
+            current_version_no: 1,
+            index_status: 'failed',
+          }),
+          contentItem({
+            id: 4,
+            title: '同步中话术',
+            status: 'published',
+            current_version_id: 4,
+            current_version_no: 1,
+            index_status: 'syncing',
+          }),
+        ],
+        total: 41,
+        page: 1,
+        page_size: 20,
+      },
+    }
   })
 
-  const { getByLabelText, getByRole, getByText, getAllByRole } = await renderAdmin(
+  const { container, getByLabelText, getByRole, getByText, getAllByRole } = await renderAdmin(
     '/admin/contents',
   )
 
@@ -116,6 +125,13 @@ test('admin content list filters, paginates, gates actions, and labels every ind
   expect(getAllByRole('button', { name: '下线' })).toHaveLength(3)
   expect(getAllByRole('link', { name: '历史' })).toHaveLength(3)
   expect(getAllByRole('button', { name: '重试索引' })).toHaveLength(1)
+  const categoryInput = getByLabelText('分类')
+  const categoryOptions = Array.from(
+    container.querySelectorAll('#admin-content-filter-category-options option'),
+  ).map((option) => option.getAttribute('value'))
+  expect(categoryInput).toHaveAttribute('list', 'admin-content-filter-category-options')
+  expect(categoryOptions).toContain('价格口径')
+  expect(categoryOptions).toContain('回款催收')
 
   await fireEvent.update(getByLabelText('内容类型'), 'standard_script')
   await fireEvent.update(getByLabelText('内容状态'), 'published')

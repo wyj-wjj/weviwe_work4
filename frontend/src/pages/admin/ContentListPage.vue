@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 
 import {
   listAdminContents,
+  listAdminContentCategories,
   offlineAdminContent,
   publishAdminContent,
   retryAdminContentIndex,
@@ -12,11 +13,13 @@ import {
 } from '../../api/admin-content'
 import AdminLayout from '../../components/AdminLayout.vue'
 import AppState from '../../components/AppState.vue'
+import { FIXED_CONTENT_CATEGORIES } from '../../constants/content-options'
 import { adminScopeLabel, contentTypeLabel, permissionLabel, updateLevelLabel } from '../../utils/format'
 
 const items = ref<AdminContent[]>([])
 const total = ref(0)
 const page = ref(1)
+const historyCategories = ref<string[]>([])
 const pageSize = 20
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const message = ref('')
@@ -30,6 +33,16 @@ const filters = reactive({
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const categorySuggestions = computed(() => {
+  const merged = new Set<string>()
+  for (const category of [...FIXED_CONTENT_CATEGORIES, ...historyCategories.value]) {
+    const normalized = category.trim()
+    if (normalized) {
+      merged.add(normalized)
+    }
+  }
+  return Array.from(merged)
+})
 
 const statusLabels: Record<string, string> = {
   draft: '草稿',
@@ -101,6 +114,17 @@ async function loadContents() {
     state.value = 'ready'
   } catch {
     state.value = 'service'
+  }
+}
+
+async function loadCategories() {
+  try {
+    const response = await listAdminContentCategories()
+    historyCategories.value = response.items.filter(
+      (item): item is string => typeof item === 'string',
+    )
+  } catch {
+    historyCategories.value = []
   }
 }
 
@@ -234,7 +258,9 @@ async function retryIndex(item: AdminContent) {
   }
 }
 
-onMounted(loadContents)
+onMounted(async () => {
+  await Promise.all([loadContents(), loadCategories()])
+})
 </script>
 
 <template>
@@ -279,7 +305,14 @@ onMounted(loadContents)
         </label>
         <label>
           <span>分类</span>
-          <input v-model.trim="filters.category" type="text" />
+          <input
+            v-model.trim="filters.category"
+            type="text"
+            list="admin-content-filter-category-options"
+          />
+          <datalist id="admin-content-filter-category-options">
+            <option v-for="category in categorySuggestions" :key="category" :value="category" />
+          </datalist>
         </label>
         <button class="admin-button" type="submit">筛选</button>
       </form>

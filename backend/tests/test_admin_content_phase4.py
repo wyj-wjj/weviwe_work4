@@ -102,6 +102,42 @@ def test_admin_content_list_filters_paginates_and_editing_draft_does_not_create_
     assert db_session.scalars(select(ContentVersion)).all() == []
 
 
+def test_admin_content_categories_returns_trimmed_distinct_history_and_rejects_non_admin(
+    client,
+    admin_headers,
+    full_user_headers,
+):
+    client.post(
+        "/api/admin/contents",
+        json=base_payload(title="价格一", category="价格口径"),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=base_payload(title="价格二", category=" 价格口径 "),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=base_payload(title="回款", category="回款催收"),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=base_payload(title="空分类", category=None),
+        headers=admin_headers,
+    )
+
+    response = client.get("/api/admin/content-categories", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["items"].count("价格口径") == 1
+    assert set(response.json()["items"]) == {"价格口径", "回款催收"}
+
+    rejected = client.get("/api/admin/content-categories", headers=full_user_headers)
+    assert rejected.status_code == 403
+
+
 def test_draft_revision_changes_only_when_stored_draft_fields_change(
     client,
     admin_headers,

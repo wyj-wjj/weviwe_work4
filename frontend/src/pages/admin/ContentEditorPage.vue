@@ -6,11 +6,13 @@ import { listAdminDepartments, type Department } from '../../api/admin-departmen
 import {
   createAdminContent,
   getAdminContent,
+  listAdminContentCategories,
   updateAdminContent,
   type AdminContentPayload,
 } from '../../api/admin-content'
 import AdminLayout from '../../components/AdminLayout.vue'
 import AppState from '../../components/AppState.vue'
+import { FIXED_CONTENT_CATEGORIES } from '../../constants/content-options'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +22,18 @@ const state = ref<'ready' | 'loading' | 'service'>('ready')
 const error = ref('')
 const isSaving = ref(false)
 const departments = ref<Department[]>([])
+const historyCategories = ref<string[]>([])
+
+const categorySuggestions = computed(() => {
+  const merged = new Set<string>()
+  for (const category of [...FIXED_CONTENT_CATEGORIES, ...historyCategories.value]) {
+    const normalized = category.trim()
+    if (normalized) {
+      merged.add(normalized)
+    }
+  }
+  return Array.from(merged)
+})
 
 const form = reactive({
   title: '',
@@ -77,6 +91,15 @@ async function loadDepartments() {
     departments.value = response.items
   } catch {
     departments.value = []
+  }
+}
+
+async function loadCategories() {
+  try {
+    const response = await listAdminContentCategories()
+    historyCategories.value = response.items
+  } catch {
+    historyCategories.value = []
   }
 }
 
@@ -175,7 +198,7 @@ async function saveDraft() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadDepartments(), loadContent()])
+  await Promise.all([loadDepartments(), loadCategories(), loadContent()])
 })
 </script>
 
@@ -207,7 +230,18 @@ onMounted(async () => {
         </label>
         <label>
           <span>分类</span>
-          <input v-model.trim="form.category" type="text" />
+          <input
+            v-model.trim="form.category"
+            type="text"
+            list="content-category-options"
+          />
+          <datalist id="content-category-options">
+            <option
+              v-for="category in categorySuggestions"
+              :key="category"
+              :value="category"
+            />
+          </datalist>
         </label>
         <label>
           <span>权限级别</span>

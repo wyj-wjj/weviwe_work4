@@ -146,6 +146,26 @@ def list_admin_contents(
     return list(items), total
 
 
+def list_content_categories(db: Session, *, limit: int = 100) -> list[str]:
+    categories: list[str] = []
+    seen: set[str] = set()
+    raw_categories = db.scalars(
+        select(Content.category)
+        .where(Content.category.is_not(None))
+        .order_by(Content.updated_at.desc(), Content.id.desc())
+        .limit(limit * 5)
+    ).all()
+    for raw_category in raw_categories:
+        category = (raw_category or "").strip()
+        if not category or category in seen:
+            continue
+        seen.add(category)
+        categories.append(category)
+        if len(categories) >= limit:
+            break
+    return categories
+
+
 def next_version_no(content: Content) -> int:
     if not content.versions:
         return 1

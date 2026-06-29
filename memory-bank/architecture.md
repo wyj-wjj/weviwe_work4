@@ -335,3 +335,13 @@
 - 测验题中绑定内容的题目跟随关联内容当前范围和权限可见性；非绑定内容的人工通用题暂不新增部门字段，仍按题目自身 `permission_level` 控制，避免把题库一次性复杂化。
 - 后台新增部门管理 API 与页面；账号管理页面可给员工分配部门；内容编辑与列表页面可设置/展示“全公司通用”或“限定部门”。员工端页面展示可见范围，减少员工误解“为什么我看到了/看不到这条内容”。
 - 本轮验证基线：后端 `python -m pytest backend\tests -q` 通过；前端 `pnpm run test:unit` 为 `65 passed`；前端 `pnpm run build` 通过。
+
+## 2026-06-29 Bugfix/UX 最小改动补充
+
+- 内容分类不新增数据表，仍复用 `contents.category` 作为唯一分类字段。后端新增 `GET /api/admin/content-categories`，仅管理员可访问，从历史内容中按最近更新读取、去空格、去空值、去重并最多返回 100 个分类；前端内容编辑页将固定分类常量与历史分类合并，通过原生 `input + datalist` 提供可选可输的分类建议。
+- 员工端最新必读响应补充 `category` 字段；前端最新必读页在当前可见内容内提供分类和可见范围筛选，并先采用前端分页，每页 10 条。标准话术页保持后端现有分类筛选，列表展示改为每组默认 10 条并支持“查看更多/收起”。
+- 前端统一通过 `formatDateTime` 使用 `Intl.DateTimeFormat` 和 `Asia/Shanghai` 输出北京时间；后端返回无时区的 ISO 字符串时，前端按 UTC 兜底解析后转北京时间，空值或非法时间显示 `-`。
+- 员工端测验接口扩展为 `GET /api/app/quiz?mode=latest|review&category=`。`latest` 保持默认兼容，但在同等优先级下优先关联最近发布内容的题；`review` 在当前用户权限和部门范围内取有效题，并可按关联内容 `category` 过滤。题目响应带出 `related_content_category`，供前端复习模式分类筛选。
+- 巩固测试前端默认“跟进最新”，新增“复习旧内容”模式、答题进度、未答完提示、提交后锁定选项和“重新抽题”；仍不新增员工答题历史、分数、排行或统计表。
+- 后台账号管理和测验题管理复用已有分页 API：账号、题干、专题测验包分别维护页码和总数。重置密码表单新增面板内错误 `resetError`，短密码会直接提示“新密码至少 8 位”，避免用户误以为按钮无响应。
+- 本轮验证基线：后端 `..\.venv\Scripts\python.exe -m pytest tests -q` 通过；前端 `corepack.cmd pnpm test:unit` 为 `72 passed`；前端 `corepack.cmd pnpm build` 通过。

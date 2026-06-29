@@ -85,6 +85,11 @@ export async function listAdminContents(params: AdminContentFilters) {
   return response.data
 }
 
+export async function listAdminContentCategories() {
+  const response = await apiClient.get<{ items: string[] }>('/admin/content-categories')
+  return response.data
+}
+
 export async function getAdminContent(contentId: number) {
   const response = await apiClient.get<AdminContent>(`/admin/contents/${contentId}`)
   return response.data

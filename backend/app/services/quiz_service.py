@@ -92,6 +92,7 @@ def related_content_projection(question: QuizQuestion, *, user: User | None = No
         "related_content_id": question.related_content_id if user is None else (content.id if content else None),
         "related_content_title": content.title if content else None,
         "related_content_type": content.content_type if content else None,
+        "related_content_category": content.category if content else None,
     }
 
 
@@ -262,6 +263,7 @@ def _load_employee_quiz_questions(
     stmt = (
         select(QuizQuestion)
         .outerjoin(Content, QuizQuestion.related_content_id == Content.id)
+        .outerjoin(ContentVersion, Content.current_version_id == ContentVersion.id)
         .options(joinedload(QuizQuestion.related_content))
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.review_status == QuizReviewStatus.APPROVED.value)
@@ -269,11 +271,41 @@ def _load_employee_quiz_questions(
         .where(QuizQuestion.permission_level == permission_level.value)
         .where(or_(QuizQuestion.expires_at.is_(None), QuizQuestion.expires_at > now))
         .where(visible_related_content_filter(visible_content_levels, user))
-        .order_by(QuizQuestion.priority.desc(), QuizQuestion.id.asc())
+        .order_by(
+            QuizQuestion.priority.desc(),
+            ContentVersion.published_at.desc(),
+            QuizQuestion.id.asc(),
+        )
         .limit(limit)
     )
     if offset:
         stmt = stmt.offset(offset)
+    return list(db.scalars(stmt).all())
+
+
+def _load_employee_review_quiz_questions(
+    db: Session,
+    *,
+    user: User,
+    category: str | None = None,
+    limit: int = 10,
+) -> list[QuizQuestion]:
+    now = datetime.now(UTC)
+    stmt = (
+        select(QuizQuestion)
+        .outerjoin(Content, QuizQuestion.related_content_id == Content.id)
+        .options(joinedload(QuizQuestion.related_content))
+        .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
+        .where(QuizQuestion.review_status == QuizReviewStatus.APPROVED.value)
+        .where(QuizQuestion.needs_review.is_(False))
+        .where(QuizQuestion.permission_level.in_(visible_levels_for(user)))
+        .where(or_(QuizQuestion.expires_at.is_(None), QuizQuestion.expires_at > now))
+        .where(visible_related_content_filter(visible_levels_for(user), user))
+        .order_by(QuizQuestion.priority.desc(), QuizQuestion.updated_at.desc(), QuizQuestion.id.asc())
+        .limit(limit)
+    )
+    if category:
+        stmt = stmt.where(Content.category == category)
     return list(db.scalars(stmt).all())
 
 
@@ -294,7 +326,16 @@ def visible_related_content_filter(visible_content_levels: set[str], user: User)
     )
 
 
-def list_employee_quiz_questions(db: Session, user: User) -> list[QuizQuestion]:
+def list_employee_quiz_questions(
+    db: Session,
+    user: User,
+    *,
+    mode: str = "latest",
+    category: str | None = None,
+) -> list[QuizQuestion]:
+    if mode == "review":
+        return _load_employee_review_quiz_questions(db, user=user, category=category)
+
     user_visible_content_levels = visible_levels_for(user)
     if user.account_type not in {"admin", "full_user"}:
         return _load_employee_quiz_questions(

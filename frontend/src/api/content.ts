@@ -3,6 +3,7 @@ import { apiClient } from './client'
 export interface MustReadItem {
   id: number
   title: string
+  category: string | null
   published_at: string
   effective_at: string
   permission_level: 'general' | 'full'

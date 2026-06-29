@@ -43,6 +43,7 @@ def test_must_read_detail_contains_required_fields_and_permission_error_does_not
     assert payload["adjustment_points"]
     assert payload["published_at"]
     assert payload["effective_at"]
+    assert payload["category"] == "公告"
     assert payload["permission_level"] == "general"
 
 

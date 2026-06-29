@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import {
   createAdminQuizQuestion,
@@ -18,12 +18,21 @@ import { formatDateTime, permissionLabel } from '../../utils/format'
 
 const items = ref<AdminQuizQuestion[]>([])
 const quizSets = ref<AdminQuizSet[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = 20
+const quizSetTotal = ref(0)
+const quizSetPage = ref(1)
+const quizSetPageSize = 20
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const editingId = ref<number | null>(null)
 const showEditor = ref(false)
 const error = ref('')
 const message = ref('')
 const pendingQuestionActionId = ref<number | null>(null)
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const quizSetTotalPages = computed(() => Math.max(1, Math.ceil(quizSetTotal.value / quizSetPageSize)))
 
 const sourceLabels: Record<AdminQuizQuestion['source_type'], string> = {
   manual: '人工',
@@ -78,15 +87,27 @@ async function loadQuestions() {
   }
   try {
     const [response, setResponse] = await Promise.all([
-      listAdminQuizQuestions(),
-      listAdminQuizSets(),
+      listAdminQuizQuestions(page.value, pageSize),
+      listAdminQuizSets(quizSetPage.value, quizSetPageSize),
     ])
     items.value = response.items
+    total.value = response.total
     quizSets.value = setResponse.items
+    quizSetTotal.value = setResponse.total
     state.value = 'ready'
   } catch {
     state.value = 'service'
   }
+}
+
+async function changePage(nextPage: number) {
+  page.value = nextPage
+  await loadQuestions()
+}
+
+async function changeQuizSetPage(nextPage: number) {
+  quizSetPage.value = nextPage
+  await loadQuestions()
 }
 
 function resetEditor() {
@@ -302,6 +323,25 @@ onMounted(loadQuestions)
             </tbody>
           </table>
         </div>
+        <footer v-if="quizSetTotal > 0" class="admin-pagination">
+          <button
+            class="admin-button"
+            type="button"
+            :disabled="quizSetPage <= 1"
+            @click="changeQuizSetPage(quizSetPage - 1)"
+          >
+            上一页
+          </button>
+          <span>第 {{ quizSetPage }} / {{ quizSetTotalPages }} 页，共 {{ quizSetTotal }} 条</span>
+          <button
+            class="admin-button"
+            type="button"
+            :disabled="quizSetPage >= quizSetTotalPages"
+            @click="changeQuizSetPage(quizSetPage + 1)"
+          >
+            下一页
+          </button>
+        </footer>
       </section>
 
       <form v-if="showEditor" class="admin-form admin-panel" @submit.prevent="saveQuestion">
@@ -479,6 +519,25 @@ onMounted(loadQuestions)
           </tbody>
         </table>
       </div>
+      <footer v-if="state === 'ready' && total > 0" class="admin-pagination">
+        <button
+          class="admin-button"
+          type="button"
+          :disabled="page <= 1"
+          @click="changePage(page - 1)"
+        >
+          上一页
+        </button>
+        <span>第 {{ page }} / {{ totalPages }} 页，共 {{ total }} 条</span>
+        <button
+          class="admin-button"
+          type="button"
+          :disabled="page >= totalPages"
+          @click="changePage(page + 1)"
+        >
+          下一页
+        </button>
+      </footer>
     </section>
   </AdminLayout>
 </template>

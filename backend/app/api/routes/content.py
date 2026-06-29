@@ -15,6 +15,7 @@ from app.services.content_service import (
     create_content,
     employee_content_query,
     get_content_or_404,
+    list_content_categories,
     list_admin_contents,
     list_versions,
     offline_content,
@@ -69,6 +70,14 @@ def admin_list_contents(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/api/admin/content-categories")
+def admin_list_content_categories(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"items": list_content_categories(db)}
 
 
 @router.get("/api/admin/contents/{content_id}")
@@ -180,6 +189,7 @@ def must_read_item(content: Content) -> dict[str, Any]:
         "title": version.title,
         "published_at": version.published_at,
         "effective_at": version.effective_at,
+        "category": content.category,
         "permission_level": content.permission_level,
         "scope_type": content.scope_type,
         "department_id": content.department_id,

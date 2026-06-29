@@ -2,7 +2,27 @@ export function formatDateTime(value: string | null | undefined): string {
   if (!value) {
     return '-'
   }
-  return value.replace('T', ' ').slice(0, 16)
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return '-'
+  }
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed)
+  const normalized = hasTimezone ? trimmed : `${trimmed}Z`
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) {
+    return '-'
+  }
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`
 }
 
 export function permissionLabel(value: string): string {

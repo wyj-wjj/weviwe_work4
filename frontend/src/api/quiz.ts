@@ -9,6 +9,7 @@ export interface QuizQuestion {
   explanation: string | null
   related_content_id: number | null
   related_content_type: QuizRelatedContentType | null
+  related_content_category?: string | null
   permission_level: 'general' | 'full'
   status: string
 }
@@ -38,8 +39,16 @@ export interface QuizSubmitResponse {
   results: QuizSubmitResult[]
 }
 
-export async function getQuiz(): Promise<QuizResponse> {
-  const response = await apiClient.get<QuizResponse>('/app/quiz')
+export async function getQuiz(params: { mode?: 'latest' | 'review'; category?: string } = {}): Promise<QuizResponse> {
+  const requestParams = {
+    mode: params.mode,
+    category: params.category || undefined,
+  }
+  if (!requestParams.mode && !requestParams.category) {
+    const response = await apiClient.get<QuizResponse>('/app/quiz')
+    return response.data
+  }
+  const response = await apiClient.get<QuizResponse>('/app/quiz', { params: requestParams })
   return response.data
 }
 

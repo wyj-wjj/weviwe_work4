@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 import { listAdminDepartments, type Department } from '../../api/admin-departments'
 import {
@@ -20,13 +20,19 @@ import { formatDateTime, permissionLabel } from '../../utils/format'
 const auth = useAuthStore()
 const items = ref<AdminUser[]>([])
 const departments = ref<Department[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = 20
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const showEditor = ref(false)
 const editingId = ref<number | null>(null)
 const resetUserId = ref<number | null>(null)
 const resetPassword = ref('')
+const resetError = ref('')
 const error = ref('')
 const message = ref('')
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
 const form = reactive({
   username: '',
@@ -49,12 +55,18 @@ async function loadUsers() {
     state.value = 'loading'
   }
   try {
-    const response = await listAdminUsers()
+    const response = await listAdminUsers(page.value, pageSize)
     items.value = response.items
+    total.value = response.total
     state.value = 'ready'
   } catch {
     state.value = 'service'
   }
+}
+
+async function changePage(nextPage: number) {
+  page.value = nextPage
+  await loadUsers()
 }
 
 async function loadDepartments() {
@@ -148,12 +160,28 @@ async function saveUser() {
 function startReset(user: AdminUser) {
   resetUserId.value = user.id
   resetPassword.value = ''
+  resetError.value = ''
+  error.value = ''
   message.value = ''
 }
 
+function cancelReset() {
+  resetUserId.value = null
+  resetPassword.value = ''
+  resetError.value = ''
+}
+
 async function confirmReset() {
-  if (!resetUserId.value || resetPassword.value.length < 8) {
-    error.value = '新密码至少 8 位'
+  resetError.value = ''
+  if (!resetUserId.value) {
+    return
+  }
+  if (!resetPassword.value) {
+    resetError.value = '请输入新密码'
+    return
+  }
+  if (resetPassword.value.length < 8) {
+    resetError.value = '新密码至少 8 位'
     return
   }
   if (!window.confirm('确认重置该账号密码吗？')) {
@@ -163,9 +191,10 @@ async function confirmReset() {
     await resetAdminUserPassword(resetUserId.value, resetPassword.value)
     resetUserId.value = null
     resetPassword.value = ''
+    resetError.value = ''
     message.value = '密码已重置，请安全通知该用户；此提示不会再次展示。'
   } catch {
-    error.value = '密码重置失败，请稍后重试'
+    resetError.value = '新密码至少 8 位'
   }
 }
 
@@ -265,10 +294,17 @@ onMounted(async () => {
       <form v-if="resetUserId" class="admin-reset-panel" @submit.prevent="confirmReset">
         <label>
           <span>新密码</span>
-          <input v-model="resetPassword" type="password" />
+          <input
+            v-model="resetPassword"
+            type="password"
+            minlength="8"
+            maxlength="128"
+            autocomplete="new-password"
+          />
         </label>
+        <p v-if="resetError" class="admin-error">{{ resetError }}</p>
         <button class="admin-button admin-button--primary" type="submit">确认重置</button>
-        <button class="admin-button" type="button" @click="resetUserId = null">取消</button>
+        <button class="admin-button" type="button" @click="cancelReset">取消</button>
       </form>
 
       <AppState v-if="state === 'loading'" state="loading" />
@@ -314,6 +350,26 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+
+      <footer v-if="state === 'ready' && total > 0" class="admin-pagination">
+        <button
+          class="admin-button"
+          type="button"
+          :disabled="page <= 1"
+          @click="changePage(page - 1)"
+        >
+          上一页
+        </button>
+        <span>第 {{ page }} / {{ totalPages }} 页，共 {{ total }} 条</span>
+        <button
+          class="admin-button"
+          type="button"
+          :disabled="page >= totalPages"
+          @click="changePage(page + 1)"
+        >
+          下一页
+        </button>
+      </footer>
     </section>
   </AdminLayout>
 </template>

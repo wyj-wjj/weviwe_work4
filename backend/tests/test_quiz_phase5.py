@@ -1,7 +1,10 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import event, inspect
 
 from app.models.quiz import QuizQuestion
+from app.models.content import Content
 from test_admin_content_phase4 import base_payload, must_read_payload, standard_payload
 
 
@@ -11,6 +14,7 @@ def quiz_payload(
     permission_level: str = "general",
     status: str = "enabled",
     related_content_id: int | None = None,
+    priority: int = 0,
 ):
     return {
         "question": f"第 {index} 题应该如何处理？",
@@ -20,6 +24,7 @@ def quiz_payload(
         "related_content_id": related_content_id,
         "permission_level": permission_level,
         "status": status,
+        "priority": priority,
     }
 
 
@@ -202,6 +207,65 @@ def test_full_quiz_returns_all_available_questions_when_total_is_below_ten(
         *general_ids,
         *full_ids[1:],
     ]
+
+
+def test_employee_quiz_latest_prioritizes_recent_related_updates_and_review_filters_old_categories(
+    client,
+    admin_headers,
+    general_user_headers,
+    db_session,
+):
+    old_content_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="旧价格话术", category="价格口径", permission_level="general"),
+    )
+    new_content_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="最新风控话术", category="风控口径", permission_level="general"),
+    )
+    now = datetime(2026, 6, 29, 10, 0, tzinfo=UTC)
+    old_content = db_session.get(Content, old_content_id)
+    new_content = db_session.get(Content, new_content_id)
+    old_content.current_version.published_at = now - timedelta(days=30)
+    new_content.current_version.published_at = now
+    db_session.commit()
+
+    old_question = client.post(
+        "/api/admin/quiz-questions",
+        json=quiz_payload(1, related_content_id=old_content_id, priority=20),
+        headers=admin_headers,
+    )
+    assert old_question.status_code == 201
+    new_question = client.post(
+        "/api/admin/quiz-questions",
+        json=quiz_payload(2, related_content_id=new_content_id, priority=20),
+        headers=admin_headers,
+    )
+    assert new_question.status_code == 201
+    standalone_question = client.post(
+        "/api/admin/quiz-questions",
+        json=quiz_payload(3, priority=0),
+        headers=admin_headers,
+    )
+    assert standalone_question.status_code == 201
+
+    latest = client.get("/api/app/quiz?mode=latest", headers=general_user_headers)
+
+    assert latest.status_code == 200
+    assert [item["id"] for item in latest.json()["items"][:2]] == [
+        new_question.json()["id"],
+        old_question.json()["id"],
+    ]
+
+    review = client.get(
+        "/api/app/quiz?mode=review&category=价格口径",
+        headers=general_user_headers,
+    )
+
+    assert review.status_code == 200
+    assert [item["id"] for item in review.json()["items"]] == [old_question.json()["id"]]
 
 
 def test_employee_quiz_preloads_distinct_related_contents_with_bounded_queries(

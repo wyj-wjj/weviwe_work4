@@ -300,7 +300,7 @@ test('AI answer page renders answer, sources, updated time, copy button, and sou
     expect(getByText('可以先说明服务范围，再给出标准介绍。')).toBeInTheDocument()
   })
   expect(getByText('基础开场白')).toBeInTheDocument()
-  expect(getByText('更新时间：2026-06-17 10:00')).toBeInTheDocument()
+  expect(getByText('更新时间：2026-06-17 18:00')).toBeInTheDocument()
   expect(getByText('更新级别：大更新')).toBeInTheDocument()
   expect(getByRole('button', { name: '复制回答' })).toBeInTheDocument()
   expect(getByRole('link', { name: '查看来源' })).toHaveAttribute('href', '/app/scripts/21')

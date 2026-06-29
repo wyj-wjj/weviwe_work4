@@ -158,10 +158,12 @@ def admin_generate_quiz_for_content_version(
 
 @router.get("/api/app/quiz")
 def app_get_quiz(
+    mode: str = Query(default="latest", pattern="^(latest|review)$"),
+    category: str | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    questions = list_employee_quiz_questions(db, current_user)
+    questions = list_employee_quiz_questions(db, current_user, mode=mode, category=category)
     return {
         "items": [
             quiz_to_dict(question, include_answer=False, user=current_user)

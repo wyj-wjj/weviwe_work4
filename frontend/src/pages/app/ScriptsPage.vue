@@ -12,8 +12,13 @@ const standardScripts = ref<StandardScriptItem[]>([])
 const categories = ref<string[]>([])
 const selectedCategory = ref('')
 const state = ref<'loading' | 'ready' | 'service'>('loading')
+const groupPageSize = 10
+const baseLimit = ref(groupPageSize)
+const standardLimit = ref(groupPageSize)
 
 const hasContent = computed(() => baseScripts.value.length > 0 || standardScripts.value.length > 0)
+const visibleBaseScripts = computed(() => baseScripts.value.slice(0, baseLimit.value))
+const visibleStandardScripts = computed(() => standardScripts.value.slice(0, standardLimit.value))
 
 function rememberCategories(items: Array<BaseScriptItem | StandardScriptItem>) {
   const merged = new Set(categories.value)
@@ -31,6 +36,8 @@ async function loadScripts() {
     const response = await listScripts({ category: selectedCategory.value || undefined })
     baseScripts.value = response.base_scripts
     standardScripts.value = response.standard_scripts
+    baseLimit.value = groupPageSize
+    standardLimit.value = groupPageSize
     rememberCategories([...response.base_scripts, ...response.standard_scripts])
     state.value = 'ready'
   } catch {
@@ -70,7 +77,7 @@ onMounted(loadScripts)
           <h3>核心基础话术</h3>
           <div class="script-list">
             <RouterLink
-              v-for="item in baseScripts"
+              v-for="item in visibleBaseScripts"
               :key="item.id"
               class="script-card"
               :to="`/app/scripts/${item.id}`"
@@ -83,13 +90,23 @@ onMounted(loadScripts)
               <em>{{ permissionLabel(item.permission_level) }}</em>
             </RouterLink>
           </div>
+          <div v-if="baseScripts.length > groupPageSize" class="script-list__more">
+            <button
+              v-if="visibleBaseScripts.length < baseScripts.length"
+              type="button"
+              @click="baseLimit += groupPageSize"
+            >
+              查看更多
+            </button>
+            <button v-else type="button" @click="baseLimit = groupPageSize">收起</button>
+          </div>
         </section>
 
         <section>
           <h3>标准化话术条目</h3>
           <div class="script-list">
             <RouterLink
-              v-for="item in standardScripts"
+              v-for="item in visibleStandardScripts"
               :key="item.id"
               class="script-card"
               :to="`/app/scripts/${item.id}`"
@@ -102,6 +119,16 @@ onMounted(loadScripts)
               <small>可见范围：{{ scopeLabel(item.scope_type) }}</small>
               <em>{{ permissionLabel(item.permission_level) }}</em>
             </RouterLink>
+          </div>
+          <div v-if="standardScripts.length > groupPageSize" class="script-list__more">
+            <button
+              v-if="visibleStandardScripts.length < standardScripts.length"
+              type="button"
+              @click="standardLimit += groupPageSize"
+            >
+              查看更多
+            </button>
+            <button v-else type="button" @click="standardLimit = groupPageSize">收起</button>
           </div>
         </section>
       </div>
@@ -167,5 +194,21 @@ onMounted(loadScripts)
 .script-card em {
   color: #52606d;
   font-style: normal;
+}
+
+.script-list__more {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.script-list__more button {
+  border: 1px solid #bcccdc;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  min-height: 36px;
+  padding: 0 12px;
 }
 </style>

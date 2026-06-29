@@ -101,7 +101,7 @@ test('admin quiz page lists, creates, edits, enables, and disables questions', a
   await waitFor(() => expect(getByText('应该先做什么？')).toBeInTheDocument())
   expect(getByText('基础接待话术')).toBeInTheDocument()
   expect(getByText('消防验收新要求专题测验')).toBeInTheDocument()
-  expect(getByText('2026-06-18 08:00')).toBeInTheDocument()
+  expect(getByText('2026-06-18 16:00')).toBeInTheDocument()
 
   await fireEvent.click(getByRole('button', { name: '新建测验题' }))
   await fireEvent.update(getByLabelText('题干'), '新建题目？')
