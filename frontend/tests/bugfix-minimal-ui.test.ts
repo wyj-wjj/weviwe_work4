@@ -235,7 +235,33 @@ test('quiz page loads latest mode by default, blocks incomplete submit, and lock
   const { container, getByLabelText } = await renderRoute('/app/quiz', employeeUser)
 
   await waitFor(() => expect(container.textContent).toContain('Question 2'))
-  expect(mockedGetQuiz).toHaveBeenCalledWith({ mode: 'latest' })
+  expect(mockedGetQuiz).toHaveBeenCalledWith({ mode: 'latest', refresh_seed: expect.any(String) })
+  const firstSeed = mockedGetQuiz.mock.calls[0][0]?.refresh_seed
+  expect(container.textContent).toContain('题库较少时可能抽到相同题目')
+
+  await fireEvent.click(getButton(container, '重新抽题'))
+  await waitFor(() => expect(mockedGetQuiz).toHaveBeenCalledTimes(2))
+  const retrySeed = mockedGetQuiz.mock.calls[1][0]?.refresh_seed
+  expect(retrySeed).toEqual(expect.any(String))
+  expect(retrySeed).not.toBe(firstSeed)
+
+  await fireEvent.click(getButton(container, '复习旧内容'))
+  await waitFor(() => expect(mockedGetQuiz).toHaveBeenCalledTimes(3))
+  const reviewParams = mockedGetQuiz.mock.calls[2][0]
+  expect(reviewParams).toEqual({ mode: 'review', refresh_seed: expect.any(String) })
+  expect(reviewParams?.refresh_seed).not.toBe(retrySeed)
+
+  const categorySelect = container.querySelector<HTMLSelectElement>('select')
+  expect(categorySelect).not.toBeNull()
+  await fireEvent.update(categorySelect!, '价格口径')
+  await waitFor(() => expect(mockedGetQuiz).toHaveBeenCalledTimes(4))
+  const categoryParams = mockedGetQuiz.mock.calls[3][0]
+  expect(categoryParams).toEqual({
+    mode: 'review',
+    category: '价格口径',
+    refresh_seed: expect.any(String),
+  })
+  expect(categoryParams?.refresh_seed).not.toBe(reviewParams?.refresh_seed)
 
   await fireEvent.click(getByLabelText('Question 1 A'))
   await fireEvent.click(getButton(container, '提交答案'))

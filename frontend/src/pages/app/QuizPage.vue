@@ -52,6 +52,13 @@ function relatedPathFor(questionId: number): string | null {
   return sourceDetailPath(result.related_content_type, result.related_content_id)
 }
 
+function createRefreshSeed(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 async function loadQuiz() {
   state.value = 'loading'
   error.value = ''
@@ -60,10 +67,14 @@ async function loadQuiz() {
     delete answers[Number(questionId)]
   }
   try {
-    const response = await getQuiz({
+    const requestParams: Parameters<typeof getQuiz>[0] = {
       mode: mode.value,
-      category: mode.value === 'review' ? selectedCategory.value || undefined : undefined,
-    })
+      refresh_seed: createRefreshSeed(),
+    }
+    if (mode.value === 'review' && selectedCategory.value) {
+      requestParams.category = selectedCategory.value
+    }
+    const response = await getQuiz(requestParams)
     questions.value = response.items
     state.value = 'ready'
   } catch {
@@ -138,7 +149,10 @@ onMounted(loadQuiz)
             </option>
           </select>
         </label>
-        <button type="button" @click="loadQuiz">重新抽题</button>
+        <div class="quiz-page__refresh">
+          <button type="button" @click="loadQuiz">重新抽题</button>
+          <span>题库较少时可能抽到相同题目</span>
+        </div>
       </div>
       <AppState v-if="state === 'loading'" state="loading" />
       <AppState v-else-if="state === 'service'" state="service" />
@@ -228,6 +242,17 @@ onMounted(loadQuiz)
 .quiz-page__toolbar label {
   display: grid;
   gap: 6px;
+}
+
+.quiz-page__refresh {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.quiz-page__refresh span {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .quiz-page__form {

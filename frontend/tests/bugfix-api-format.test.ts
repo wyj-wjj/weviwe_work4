@@ -28,9 +28,9 @@ test('employee quiz request sends mode and optional category as query params', a
     data: { items: [] },
   })
 
-  await getQuiz({ mode: 'review', category: '价格口径' })
+  await getQuiz({ mode: 'review', category: '价格口径', refresh_seed: 'seed-1' })
 
   expect(get).toHaveBeenCalledWith('/app/quiz', {
-    params: { mode: 'review', category: '价格口径' },
+    params: { mode: 'review', category: '价格口径', refresh_seed: 'seed-1' },
   })
 })

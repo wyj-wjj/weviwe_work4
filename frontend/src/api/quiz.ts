@@ -39,12 +39,24 @@ export interface QuizSubmitResponse {
   results: QuizSubmitResult[]
 }
 
-export async function getQuiz(params: { mode?: 'latest' | 'review'; category?: string } = {}): Promise<QuizResponse> {
-  const requestParams = {
-    mode: params.mode,
-    category: params.category || undefined,
+export interface QuizRequestParams {
+  mode?: 'latest' | 'review'
+  category?: string
+  refresh_seed?: string | number
+}
+
+export async function getQuiz(params: QuizRequestParams = {}): Promise<QuizResponse> {
+  const requestParams: QuizRequestParams = {}
+  if (params.mode) {
+    requestParams.mode = params.mode
   }
-  if (!requestParams.mode && !requestParams.category) {
+  if (params.category) {
+    requestParams.category = params.category
+  }
+  if (params.refresh_seed !== undefined && params.refresh_seed !== '') {
+    requestParams.refresh_seed = params.refresh_seed
+  }
+  if (Object.keys(requestParams).length === 0) {
     const response = await apiClient.get<QuizResponse>('/app/quiz')
     return response.data
   }

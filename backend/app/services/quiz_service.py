@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +28,9 @@ from app.services.permission_service import scope_filter, scope_is_visible, visi
 QUIZ_GENERATION_PROMPT_VERSION = "quiz-generation-v1"
 MAJOR_TOPIC_PRIORITY = 100
 MEDIUM_UPDATE_PRIORITY = 50
+EMPLOYEE_QUIZ_LIMIT = 10
+EMPLOYEE_QUIZ_CANDIDATE_WINDOW = 100
+OLDEST_SORT_TIME = datetime.min.replace(tzinfo=UTC)
 QUIZ_SOURCE_INVALID_MESSAGES = {
     "source_content_missing": "源内容不存在，不能审核通过或启用该题目。",
     "source_content_offline": "源内容已下线，不能审核通过或启用该题目。",
@@ -264,7 +268,7 @@ def _load_employee_quiz_questions(
         select(QuizQuestion)
         .outerjoin(Content, QuizQuestion.related_content_id == Content.id)
         .outerjoin(ContentVersion, Content.current_version_id == ContentVersion.id)
-        .options(joinedload(QuizQuestion.related_content))
+        .options(joinedload(QuizQuestion.related_content).joinedload(Content.current_version))
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.review_status == QuizReviewStatus.APPROVED.value)
         .where(QuizQuestion.needs_review.is_(False))
@@ -294,7 +298,7 @@ def _load_employee_review_quiz_questions(
     stmt = (
         select(QuizQuestion)
         .outerjoin(Content, QuizQuestion.related_content_id == Content.id)
-        .options(joinedload(QuizQuestion.related_content))
+        .options(joinedload(QuizQuestion.related_content).joinedload(Content.current_version))
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.review_status == QuizReviewStatus.APPROVED.value)
         .where(QuizQuestion.needs_review.is_(False))
@@ -307,6 +311,80 @@ def _load_employee_review_quiz_questions(
     if category:
         stmt = stmt.where(Content.category == category)
     return list(db.scalars(stmt).all())
+
+
+def _aware_sort_time(value: datetime | None) -> datetime:
+    if value is None:
+        return OLDEST_SORT_TIME
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _question_batch_id(question: QuizQuestion) -> int:
+    if question.related_version_id is not None:
+        return question.related_version_id
+    content = question.related_content
+    if content is not None and content.current_version_id is not None:
+        return content.current_version_id
+    if question.generation_batch_id is not None:
+        return question.generation_batch_id
+    return 0
+
+
+def _question_group_key(question: QuizQuestion) -> tuple[int, str, int]:
+    priority = question.priority or 0
+    if question.related_version_id is not None:
+        return (priority, "version", question.related_version_id)
+    content = question.related_content
+    if content is not None and content.current_version_id is not None:
+        return (priority, "version", content.current_version_id)
+    if question.generation_batch_id is not None:
+        return (priority, "batch", question.generation_batch_id)
+    return (priority, "standalone", 0)
+
+
+def _question_group_time(question: QuizQuestion, mode: str) -> datetime:
+    if mode == "latest":
+        content = question.related_content
+        current_version = content.current_version if content is not None else None
+        published_at = current_version.published_at if current_version is not None else None
+        if published_at is not None:
+            return _aware_sort_time(published_at)
+    return _aware_sort_time(question.updated_at)
+
+
+def _stable_shuffle_key(refresh_seed: str, question: QuizQuestion) -> str:
+    return hashlib.sha256(f"{refresh_seed}:{question.id}".encode("utf-8")).hexdigest()
+
+
+def _sample_employee_quiz_questions(
+    candidates: list[QuizQuestion],
+    *,
+    refresh_seed: str | None,
+    mode: str,
+    limit: int = EMPLOYEE_QUIZ_LIMIT,
+) -> list[QuizQuestion]:
+    if not refresh_seed:
+        return candidates[:limit]
+
+    groups: dict[tuple[int, str, int], list[QuizQuestion]] = {}
+    for question in candidates:
+        groups.setdefault(_question_group_key(question), []).append(question)
+
+    def group_sort_key(item: tuple[tuple[int, str, int], list[QuizQuestion]]) -> tuple[int, datetime, int]:
+        key, questions = item
+        priority = key[0]
+        group_time = max((_question_group_time(question, mode) for question in questions), default=OLDEST_SORT_TIME)
+        batch_id = max((_question_batch_id(question) for question in questions), default=0)
+        return (priority, group_time, batch_id)
+
+    selected: list[QuizQuestion] = []
+    for _key, questions in sorted(groups.items(), key=group_sort_key, reverse=True):
+        selected.extend(sorted(questions, key=lambda question: (_stable_shuffle_key(refresh_seed, question), question.id)))
+        if len(selected) >= limit:
+            return selected[:limit]
+    return selected
 
 
 def visible_related_content_filter(visible_content_levels: set[str], user: User):
@@ -332,19 +410,80 @@ def list_employee_quiz_questions(
     *,
     mode: str = "latest",
     category: str | None = None,
+    refresh_seed: str | None = None,
 ) -> list[QuizQuestion]:
     if mode == "review":
-        return _load_employee_review_quiz_questions(db, user=user, category=category)
+        review_candidates = _load_employee_review_quiz_questions(
+            db,
+            user=user,
+            category=category,
+            limit=EMPLOYEE_QUIZ_CANDIDATE_WINDOW if refresh_seed else EMPLOYEE_QUIZ_LIMIT,
+        )
+        return _sample_employee_quiz_questions(
+            review_candidates,
+            refresh_seed=refresh_seed,
+            mode=mode,
+            limit=EMPLOYEE_QUIZ_LIMIT,
+        )
 
     user_visible_content_levels = visible_levels_for(user)
     if user.account_type not in {"admin", "full_user"}:
-        return _load_employee_quiz_questions(
+        general_candidates = _load_employee_quiz_questions(
             db,
             permission_level=ContentLevel.GENERAL,
             visible_content_levels=user_visible_content_levels,
             user=user,
-            limit=10,
+            limit=EMPLOYEE_QUIZ_CANDIDATE_WINDOW if refresh_seed else EMPLOYEE_QUIZ_LIMIT,
         )
+        return _sample_employee_quiz_questions(
+            general_candidates,
+            refresh_seed=refresh_seed,
+            mode=mode,
+            limit=EMPLOYEE_QUIZ_LIMIT,
+        )
+
+    if refresh_seed:
+        full_candidates = _load_employee_quiz_questions(
+            db,
+            permission_level=ContentLevel.FULL,
+            visible_content_levels=user_visible_content_levels,
+            user=user,
+            limit=EMPLOYEE_QUIZ_CANDIDATE_WINDOW,
+        )
+        reserved_full = _sample_employee_quiz_questions(
+            full_candidates,
+            refresh_seed=refresh_seed,
+            mode=mode,
+            limit=1,
+        )
+        general_candidates = _load_employee_quiz_questions(
+            db,
+            permission_level=ContentLevel.GENERAL,
+            visible_content_levels=user_visible_content_levels,
+            user=user,
+            limit=EMPLOYEE_QUIZ_CANDIDATE_WINDOW,
+        )
+        general_items = _sample_employee_quiz_questions(
+            general_candidates,
+            refresh_seed=refresh_seed,
+            mode=mode,
+            limit=9 if reserved_full else EMPLOYEE_QUIZ_LIMIT,
+        )
+        selected = reserved_full + general_items
+        if reserved_full and len(selected) < EMPLOYEE_QUIZ_LIMIT:
+            selected_ids = {question.id for question in selected}
+            additional_full_candidates = [
+                question for question in full_candidates if question.id not in selected_ids
+            ]
+            selected.extend(
+                _sample_employee_quiz_questions(
+                    additional_full_candidates,
+                    refresh_seed=refresh_seed,
+                    mode=mode,
+                    limit=EMPLOYEE_QUIZ_LIMIT - len(selected),
+                )
+            )
+        return selected
 
     reserved_full = _load_employee_quiz_questions(
         db,
@@ -358,17 +497,17 @@ def list_employee_quiz_questions(
         permission_level=ContentLevel.GENERAL,
         visible_content_levels=user_visible_content_levels,
         user=user,
-        limit=9 if reserved_full else 10,
+        limit=9 if reserved_full else EMPLOYEE_QUIZ_LIMIT,
     )
     selected = reserved_full + general_items
-    if reserved_full and len(selected) < 10:
+    if reserved_full and len(selected) < EMPLOYEE_QUIZ_LIMIT:
         selected.extend(
             _load_employee_quiz_questions(
                 db,
                 permission_level=ContentLevel.FULL,
                 visible_content_levels=user_visible_content_levels,
                 user=user,
-                limit=10 - len(selected),
+                limit=EMPLOYEE_QUIZ_LIMIT - len(selected),
                 offset=1,
             )
         )

@@ -267,6 +267,92 @@ def test_employee_quiz_latest_prioritizes_recent_related_updates_and_review_filt
     assert review.status_code == 200
     assert [item["id"] for item in review.json()["items"]] == [old_question.json()["id"]]
 
+    seeded_review = client.get(
+        "/api/app/quiz?mode=review&category=价格口径&refresh_seed=review-seed",
+        headers=general_user_headers,
+    )
+
+    assert seeded_review.status_code == 200
+    assert [item["id"] for item in seeded_review.json()["items"]] == [old_question.json()["id"]]
+
+
+def test_employee_quiz_refresh_seed_stably_shuffles_same_priority_version_group(
+    client,
+    admin_headers,
+    general_user_headers,
+):
+    content_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="Seed sampling content", category="seed-category", permission_level="general"),
+    )
+    question_ids = []
+    for index in range(12):
+        created = client.post(
+            "/api/admin/quiz-questions",
+            json=quiz_payload(index, related_content_id=content_id, priority=20),
+            headers=admin_headers,
+        )
+        assert created.status_code == 201
+        question_ids.append(created.json()["id"])
+
+    first = client.get(
+        "/api/app/quiz?mode=latest&refresh_seed=seed-alpha",
+        headers=general_user_headers,
+    )
+    repeated = client.get(
+        "/api/app/quiz?mode=latest&refresh_seed=seed-alpha",
+        headers=general_user_headers,
+    )
+    different = client.get(
+        "/api/app/quiz?mode=latest&refresh_seed=seed-beta",
+        headers=general_user_headers,
+    )
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert different.status_code == 200
+    first_ids = [item["id"] for item in first.json()["items"]]
+    repeated_ids = [item["id"] for item in repeated.json()["items"]]
+    different_ids = [item["id"] for item in different.json()["items"]]
+    assert len(first_ids) == 10
+    assert set(first_ids).issubset(set(question_ids))
+    assert first_ids == repeated_ids
+    assert first_ids != different_ids
+
+
+def test_employee_quiz_refresh_seed_keeps_higher_priority_group_first(
+    client,
+    admin_headers,
+    general_user_headers,
+):
+    content_id = create_published_content(
+        client,
+        admin_headers,
+        base_payload(title="Priority sampling content", category="seed-category", permission_level="general"),
+    )
+    for index in range(6):
+        created = client.post(
+            "/api/admin/quiz-questions",
+            json=quiz_payload(index, related_content_id=content_id, priority=10),
+            headers=admin_headers,
+        )
+        assert created.status_code == 201
+    high_priority = client.post(
+        "/api/admin/quiz-questions",
+        json=quiz_payload(99, related_content_id=content_id, priority=100),
+        headers=admin_headers,
+    )
+    assert high_priority.status_code == 201
+
+    response = client.get(
+        "/api/app/quiz?mode=latest&refresh_seed=priority-seed",
+        headers=general_user_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["id"] == high_priority.json()["id"]
+
 
 def test_employee_quiz_preloads_distinct_related_contents_with_bounded_queries(
     client,
