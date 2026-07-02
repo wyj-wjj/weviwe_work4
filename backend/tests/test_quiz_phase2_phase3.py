@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from alembic import command
 from sqlalchemy import create_engine, inspect
@@ -56,8 +57,22 @@ class QuizJsonDashScopeClient:
         self.embedding_requests.append(text)
         return EmbeddingResult(vector=[0.1, 0.2, 0.3], model="fake-embedding")
 
-    def generate_answer(self, *, question: str, contexts: list[dict]) -> ChatGeneration:
-        self.chat_requests.append({"question": question, "contexts": contexts})
+    def generate_answer(
+        self,
+        *,
+        question: str,
+        contexts: list[dict],
+        model_name: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> ChatGeneration:
+        self.chat_requests.append(
+            {
+                "question": question,
+                "contexts": contexts,
+                "model_name": model_name,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         return ChatGeneration(answer_text=json.dumps(self.answer_payload, ensure_ascii=False), usage={})
 
 
@@ -172,6 +187,25 @@ def test_major_publish_defers_ai_candidate_generation_to_history_action(
     assert batch["status"] == "completed"
     assert batch["requested_count"] == 5
     assert batch["generated_count"] == 2
+
+
+def test_manual_generation_uses_quiz_model_and_timeout(client, admin_headers):
+    fake = QuizJsonDashScopeClient(generated_questions_payload())
+    fake.settings = SimpleNamespace(
+        dashscope_chat_model="chat-model",
+        dashscope_quiz_model="quiz-model",
+        dashscope_quiz_timeout_seconds=91.0,
+    )
+    app.dependency_overrides[get_dashscope_client] = lambda: fake
+
+    content_id = create_content(client, admin_headers)
+    published = publish_major(client, admin_headers, content_id)
+
+    batch = generate_quiz_for_version(client, admin_headers, content_id, published["current_version_id"])
+
+    assert batch["model_name"] == "quiz-model"
+    assert fake.chat_requests[0]["model_name"] == "quiz-model"
+    assert fake.chat_requests[0]["timeout_seconds"] == 91.0
 
 
 def test_manual_major_generation_creates_disabled_ai_candidates_and_topic_set(

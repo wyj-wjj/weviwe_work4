@@ -710,6 +710,20 @@ def chat_model_name(dashscope_client) -> str:
     return getattr(dashscope_client, "chat_model", "qwen-plus")
 
 
+def quiz_model_name(dashscope_client) -> str:
+    settings = getattr(dashscope_client, "settings", None)
+    if settings is not None and getattr(settings, "dashscope_quiz_model", None):
+        return settings.dashscope_quiz_model
+    return chat_model_name(dashscope_client)
+
+
+def quiz_timeout_seconds(dashscope_client) -> float | None:
+    settings = getattr(dashscope_client, "settings", None)
+    if settings is not None:
+        return getattr(settings, "dashscope_quiz_timeout_seconds", None)
+    return None
+
+
 def version_context_text(content: Content, version: ContentVersion) -> str:
     payload_text = (
         json.dumps(version.structured_payload, ensure_ascii=False)
@@ -845,7 +859,7 @@ def generate_candidate_questions_for_version(
         version_id=version.id,
         update_level=version.update_level,
         status=QuizGenerationStatus.PENDING.value,
-        model_name=chat_model_name(dashscope_client),
+        model_name=quiz_model_name(dashscope_client),
         prompt_version=QUIZ_GENERATION_PROMPT_VERSION,
         requested_count=resolved_count,
         generated_count=0,
@@ -864,6 +878,8 @@ def generate_candidate_questions_for_version(
                     "text": version_context_text(content, version),
                 }
             ],
+            model_name=quiz_model_name(dashscope_client),
+            timeout_seconds=quiz_timeout_seconds(dashscope_client),
         )
         generated_payloads = decode_generated_questions(generation.answer_text, requested_count=resolved_count)
         priority = question_priority_for_version(version)

@@ -137,6 +137,47 @@ def test_chunk_hash_is_stable_for_same_text_and_changes_when_text_changes() -> N
     assert stable_content_hash("Same approved text.") != stable_content_hash("Changed approved text.")
 
 
+def test_long_published_content_is_split_into_multiple_mysql_chunks_and_vectors(db_session) -> None:
+    creator = admin_user(db_session)
+    paragraphs = [
+        f"第 {index} 段：这是一个用于验证长内容检索切分的业务段落，包含客户需求、价格口径、交付要求和核对事项。"
+        for index in range(1, 45)
+    ]
+    content = create_and_publish(
+        db_session,
+        creator,
+        create_content_payload(
+            content_type=ContentType.BASE_SCRIPT,
+            title="Long Base",
+            summary="Long summary",
+            body="\n\n".join(paragraphs),
+            structured_payload={"points": ["长内容要点"]},
+        ),
+    )
+    dashscope = FakeDashScopeClient(embedding=[0.1, 0.2, 0.3], embedding_model="fake-embedding")
+    milvus = FakeMilvusClient()
+
+    result = sync_content_index(db_session, content_id=content.id, dashscope_client=dashscope, milvus_client=milvus)
+
+    chunks = db_session.scalars(
+        select(ContentChunk)
+        .where(ContentChunk.content_id == content.id)
+        .where(ContentChunk.is_active.is_(True))
+        .order_by(ContentChunk.sort_order.asc())
+    ).all()
+    records = db_session.scalars(
+        select(VectorIndexRecord).where(VectorIndexRecord.content_id == content.id).order_by(VectorIndexRecord.id.asc())
+    ).all()
+    vectors = milvus.upsert_requests[-1][1]
+    assert result.indexed_count == len(chunks)
+    assert len(chunks) > 1
+    assert [chunk.sort_order for chunk in chunks] == list(range(1, len(chunks) + 1))
+    assert all("标题：Long Base" in chunk.chunk_text for chunk in chunks)
+    assert len(records) == len(chunks)
+    assert len(vectors) == len(chunks)
+    assert {vector.metadata["chunk_id"] for vector in vectors} == {chunk.id for chunk in chunks}
+
+
 def test_index_sync_success_creates_active_vector_records(db_session) -> None:
     creator = admin_user(db_session)
     content = create_and_publish(

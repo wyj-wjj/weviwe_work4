@@ -166,6 +166,40 @@ def list_content_categories(db: Session, *, limit: int = 100) -> list[str]:
     return categories
 
 
+def list_content_scenes(db: Session, *, limit: int = 100) -> list[str]:
+    scenes: list[str] = []
+    seen: set[str] = set()
+    contents = db.scalars(
+        select(Content)
+        .where(Content.content_type == ContentType.STANDARD_SCRIPT.value)
+        .order_by(Content.updated_at.desc(), Content.id.desc())
+        .limit(limit * 5)
+    ).all()
+    for content in contents:
+        payloads = [content.draft_payload]
+        if content.current_version is not None:
+            payloads.append(content.current_version.structured_payload)
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            scene = str(payload.get("scene") or "").strip()
+            if not scene or scene in seen:
+                continue
+            seen.add(scene)
+            scenes.append(scene)
+            if len(scenes) >= limit:
+                return scenes
+    return scenes
+
+
+def delete_draft_content(db: Session, *, content_id: int) -> None:
+    content = get_content_or_404(db, content_id)
+    if content.status != ContentStatus.DRAFT.value or content.current_version_id is not None:
+        raise AppError(code="draft_delete_forbidden", message="只能删除未发布草稿。", status_code=409)
+    db.delete(content)
+    db.commit()
+
+
 def next_version_no(content: Content) -> int:
     if not content.versions:
         return 1

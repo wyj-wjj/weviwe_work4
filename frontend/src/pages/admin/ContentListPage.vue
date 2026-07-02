@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import {
+  deleteAdminContentDraft,
   listAdminContents,
   listAdminContentCategories,
   offlineAdminContent,
@@ -23,7 +24,7 @@ const historyCategories = ref<string[]>([])
 const pageSize = 20
 const state = ref<'loading' | 'ready' | 'service'>('loading')
 const message = ref('')
-type PendingAction = 'publish' | 'offline' | 'retry'
+type PendingAction = 'publish' | 'offline' | 'retry' | 'delete'
 const pendingActions = reactive<Record<number, PendingAction | undefined>>({})
 const filters = reactive({
   content_type: '',
@@ -59,42 +60,16 @@ const indexLabels: Record<string, string> = {
 
 type UpdateLevel = AdminContentPublishPayload['update_level']
 
-function normalizeUpdateLevel(value: string | null): UpdateLevel | null {
-  const normalized = value?.trim().toLowerCase()
-  if (normalized === 'minor' || normalized === 'medium' || normalized === 'major') {
-    return normalized
-  }
-  return null
-}
+const publishDialog = reactive({
+  open: false,
+  item: null as AdminContent | null,
+  update_level: 'major' as UpdateLevel,
+  change_summary: '',
+})
 
-function requestPublishPayload(item: AdminContent): AdminContentPublishPayload | null {
-  const defaultLevel: UpdateLevel = item.current_version_id ? 'minor' : 'major'
-  const selectedLevel = window.prompt(
-    [
-      '请输入本次更新级别：minor / medium / major',
-      'minor：小更新，不影响题库',
-      'medium：中更新，关联题目需复核',
-      'major：大更新，建议生成专题候选题',
-    ].join('\n'),
-    defaultLevel,
-  )
-  if (selectedLevel === null) {
-    return null
-  }
-  const updateLevel = normalizeUpdateLevel(selectedLevel)
-  if (!updateLevel) {
-    message.value = '更新级别必须是 minor、medium 或 major'
-    return null
-  }
-  const summary = window.prompt('本次变更摘要，可留空：', '')
-  if (summary === null) {
-    return null
-  }
-  return {
-    update_level: updateLevel,
-    change_summary: summary.trim() || null,
-  }
-}
+const publishDialogDetails = computed(() =>
+  publishDialog.item ? publishConfirmation(publishDialog.item).split('\n') : [],
+)
 
 async function loadContents() {
   if (items.value.length === 0) {
@@ -150,6 +125,10 @@ function canOffline(item: AdminContent) {
   return item.status === 'published'
 }
 
+function canDeleteDraft(item: AdminContent) {
+  return item.status === 'draft' && item.current_version_id === null
+}
+
 function isPending(item: AdminContent) {
   return Boolean(pendingActions[item.id])
 }
@@ -179,6 +158,30 @@ function publishConfirmation(item: AdminContent) {
   ].join('\n')
 }
 
+function defaultPublishLevel(item: AdminContent): UpdateLevel {
+  return item.current_version_id ? 'minor' : 'major'
+}
+
+function openPublishDialog(item: AdminContent) {
+  if (isPending(item)) {
+    return
+  }
+  message.value = ''
+  publishDialog.item = item
+  publishDialog.update_level = defaultPublishLevel(item)
+  publishDialog.change_summary = ''
+  publishDialog.open = true
+}
+
+function closePublishDialog(force = false) {
+  if (!force && publishDialog.item && pendingActions[publishDialog.item.id] === 'publish') {
+    return
+  }
+  publishDialog.open = false
+  publishDialog.item = null
+  publishDialog.change_summary = ''
+}
+
 function publishSuccessMessage(result: AdminContent) {
   if (result.index_status === 'failed') {
     return '内容已发布，但 AI 检索暂不可用'
@@ -195,17 +198,18 @@ function publishSuccessMessage(result: AdminContent) {
   return '内容发布成功'
 }
 
-async function publish(item: AdminContent) {
+async function confirmPublish() {
+  const item = publishDialog.item
+  if (!item) {
+    return
+  }
   if (isPending(item)) {
     return
   }
-  if (!window.confirm(publishConfirmation(item))) {
-    return
-  }
   message.value = ''
-  const publishPayload = requestPublishPayload(item)
-  if (!publishPayload) {
-    return
+  const publishPayload: AdminContentPublishPayload = {
+    update_level: publishDialog.update_level,
+    change_summary: publishDialog.change_summary.trim() || null,
   }
   pendingActions[item.id] = 'publish'
   try {
@@ -215,6 +219,7 @@ async function publish(item: AdminContent) {
     } else {
       message.value = publishSuccessMessage(result)
     }
+    closePublishDialog(true)
     await loadContents()
   } catch {
     message.value = '发布失败，请稍后重试'
@@ -253,6 +258,25 @@ async function retryIndex(item: AdminContent) {
     await loadContents()
   } catch {
     message.value = '索引重试失败，请稍后重试'
+  } finally {
+    delete pendingActions[item.id]
+  }
+}
+
+async function deleteDraft(item: AdminContent) {
+  if (isPending(item)) {
+    return
+  }
+  if (!window.confirm('确定删除这个草稿吗？删除后不可恢复。')) {
+    return
+  }
+  pendingActions[item.id] = 'delete'
+  try {
+    await deleteAdminContentDraft(item.id)
+    message.value = '草稿已删除'
+    await loadContents()
+  } catch {
+    message.value = '草稿删除失败，请稍后重试'
   } finally {
     delete pendingActions[item.id]
   }
@@ -364,7 +388,7 @@ onMounted(async () => {
                     v-if="canPublish(item)"
                     type="button"
                     :disabled="isPending(item)"
-                    @click="publish(item)"
+                    @click="openPublishDialog(item)"
                   >
                     {{ pendingActions[item.id] === 'publish' ? '发布中' : '发布' }}
                   </button>
@@ -390,6 +414,14 @@ onMounted(async () => {
                     @click="retryIndex(item)"
                   >
                     {{ pendingActions[item.id] === 'retry' ? '重试中' : '重试索引' }}
+                  </button>
+                  <button
+                    v-if="canDeleteDraft(item)"
+                    type="button"
+                    :disabled="isPending(item)"
+                    @click="deleteDraft(item)"
+                  >
+                    {{ pendingActions[item.id] === 'delete' ? '删除中' : '删除草稿' }}
                   </button>
                 </div>
               </td>
@@ -417,6 +449,135 @@ onMounted(async () => {
           下一页
         </button>
       </footer>
+
+      <div v-if="publishDialog.open && publishDialog.item" class="publish-dialog-backdrop">
+        <section
+          class="publish-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="publish-dialog-title"
+        >
+          <header class="publish-dialog__header">
+            <div>
+              <h3 id="publish-dialog-title">发布内容</h3>
+              <p>{{ publishDialog.item.title }}</p>
+            </div>
+            <button
+              class="admin-button"
+              type="button"
+              :disabled="pendingActions[publishDialog.item.id] === 'publish'"
+              @click="closePublishDialog()"
+            >
+              取消
+            </button>
+          </header>
+          <ul class="publish-dialog__details">
+            <li v-for="line in publishDialogDetails" :key="line">{{ line }}</li>
+          </ul>
+          <label>
+            <span>更新级别</span>
+            <select v-model="publishDialog.update_level">
+              <option value="minor">小更新</option>
+              <option value="medium">中更新</option>
+              <option value="major">大更新</option>
+            </select>
+          </label>
+          <label>
+            <span>变更摘要</span>
+            <textarea v-model.trim="publishDialog.change_summary" rows="3" />
+          </label>
+          <div class="publish-dialog__actions">
+            <button
+              class="admin-button"
+              type="button"
+              :disabled="pendingActions[publishDialog.item.id] === 'publish'"
+              @click="closePublishDialog()"
+            >
+              取消
+            </button>
+            <button
+              class="admin-button admin-button--primary"
+              type="button"
+              :disabled="pendingActions[publishDialog.item.id] === 'publish'"
+              @click="confirmPublish"
+            >
+              {{ pendingActions[publishDialog.item.id] === 'publish' ? '发布中' : '确认发布' }}
+            </button>
+          </div>
+        </section>
+      </div>
     </section>
   </AdminLayout>
 </template>
+
+<style scoped>
+.publish-dialog-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 60;
+}
+
+.publish-dialog {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.22);
+  display: grid;
+  gap: 16px;
+  max-height: calc(100vh - 48px);
+  max-width: 560px;
+  overflow: auto;
+  padding: 20px;
+  width: min(560px, 100%);
+}
+
+.publish-dialog__header,
+.publish-dialog__actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.publish-dialog__header h3,
+.publish-dialog__header p {
+  margin: 0;
+}
+
+.publish-dialog__header p {
+  color: #475569;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.publish-dialog__details {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #334155;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 12px 12px 28px;
+}
+
+.publish-dialog label {
+  color: #0f172a;
+  display: grid;
+  gap: 6px;
+}
+
+.publish-dialog select,
+.publish-dialog textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #0f172a;
+  font: inherit;
+  padding: 8px 10px;
+  width: 100%;
+}
+</style>

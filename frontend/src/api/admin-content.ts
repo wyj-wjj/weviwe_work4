@@ -1,5 +1,7 @@
 import { apiClient } from './client'
 
+export const CONTENT_IMPORT_TIMEOUT_MS = 120000
+
 export interface AdminContent {
   id: number
   content_type: 'base_script' | 'standard_script' | 'must_read'
@@ -30,6 +32,62 @@ export interface AdminContentPayload {
   summary: string
   body: string
   structured_payload: Record<string, unknown>
+}
+
+export type ContentImportParseMode = 'fast' | 'enhanced'
+
+export interface ContentImportDraft {
+  title: string
+  category: string | null
+  summary: string
+  body: string
+  structured_payload: Record<string, unknown>
+  warnings: string[]
+}
+
+export interface ContentImportSplitSuggestion extends ContentImportDraft {
+  temp_id: string
+  suggested_content_type: AdminContent['content_type']
+  source_span: {
+    start_block: number
+    end_block: number
+  }
+  confidence: 'low' | 'medium' | 'high'
+  validation_status?: 'valid' | 'invalid' | 'warning'
+  is_saveable?: boolean
+  missing_fields?: string[]
+  quality_warnings?: string[]
+}
+
+export interface ContentImportResult {
+  content_type: AdminContent['content_type']
+  single_draft: ContentImportDraft
+  split_suggestions: ContentImportSplitSuggestion[]
+  raw_text: string
+  parse_method: string
+  warnings: string[]
+  extraction_warnings?: string[]
+  structure_warnings?: string[]
+  structure_status?: 'completed' | 'failed'
+  structure_error_code?: string | null
+  structure_error_message?: string | null
+  parse_trace?: {
+    file_type: 'docx' | 'pdf'
+    parse_method: string
+    local_block_count: number
+    image_count: number
+    ocr_image_count: number
+    ocr_failed_count: number
+    ocr_page_count: number
+    structure_status?: 'completed' | 'failed' | null
+  } | null
+  pages: Array<{
+    page: number
+    chosen: 'local' | 'ocr'
+    local_score: number
+    ocr_score: number
+    warning: string | null
+  }>
 }
 
 export interface AdminContentFilters {
@@ -90,6 +148,29 @@ export async function listAdminContentCategories() {
   return response.data
 }
 
+export async function listAdminContentScenes() {
+  const response = await apiClient.get<{ items: string[] }>('/admin/content-scenes')
+  return response.data
+}
+
+export async function parseAdminContentImport(payload: {
+  content_type: AdminContent['content_type']
+  parse_mode: ContentImportParseMode
+  force_ocr: boolean
+  file: File
+}) {
+  const formData = new FormData()
+  formData.append('content_type', payload.content_type)
+  formData.append('parse_mode', payload.parse_mode)
+  formData.append('force_ocr', String(payload.force_ocr))
+  formData.append('file', payload.file)
+  const response = await apiClient.post<ContentImportResult>('/admin/content-import/parse', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: CONTENT_IMPORT_TIMEOUT_MS,
+  })
+  return response.data
+}
+
 export async function getAdminContent(contentId: number) {
   const response = await apiClient.get<AdminContent>(`/admin/contents/${contentId}`)
   return response.data
@@ -106,6 +187,10 @@ export async function updateAdminContent(
 ) {
   const response = await apiClient.patch<AdminContent>(`/admin/contents/${contentId}`, payload)
   return response.data
+}
+
+export async function deleteAdminContentDraft(contentId: number) {
+  await apiClient.delete(`/admin/contents/${contentId}`)
 }
 
 export async function publishAdminContent(contentId: number, payload?: AdminContentPublishPayload) {

@@ -28,6 +28,10 @@ class IndexSyncResult:
     error_code: str | None = None
 
 
+RETRIEVAL_CHUNK_MAX_CHARS = 1100
+RETRIEVAL_CHUNK_OVERLAP_CHARS = 180
+
+
 def stable_content_hash(text: str) -> str:
     normalized = "\n".join(line.rstrip() for line in text.strip().splitlines())
     return sha256(normalized.encode("utf-8")).hexdigest()
@@ -53,6 +57,79 @@ def common_chunk_fields(content: Content, version: ContentVersion) -> list[str]:
         ]
         if field
     ]
+
+
+def expand_chunk_specs(specs: list[ChunkSpec]) -> list[ChunkSpec]:
+    expanded: list[ChunkSpec] = []
+    next_order = 1
+    for spec in sorted(specs, key=lambda item: item.sort_order):
+        for text in split_retrieval_text(spec.text):
+            expanded.append(ChunkSpec(chunk_type=spec.chunk_type, text=text, sort_order=next_order))
+            next_order += 1
+    return expanded
+
+
+def split_retrieval_text(text: str) -> list[str]:
+    stripped = text.strip()
+    if len(stripped) <= RETRIEVAL_CHUNK_MAX_CHARS:
+        return [stripped]
+
+    lines = stripped.splitlines()
+    prefix_lines: list[str] = []
+    body_lines = lines
+    for index, line in enumerate(lines):
+        if line.startswith(("标题：", "分类：", "摘要：")):
+            prefix_lines.append(line)
+            continue
+        body_lines = lines[index:]
+        break
+    prefix = "\n".join(prefix_lines).strip()
+    body = "\n".join(body_lines).strip()
+    if not body:
+        return [stripped]
+
+    windows = _text_windows(body, max_chars=RETRIEVAL_CHUNK_MAX_CHARS, overlap_chars=RETRIEVAL_CHUNK_OVERLAP_CHARS)
+    return [
+        "\n".join(part for part in [prefix, window] if part).strip()
+        for window in windows
+        if window.strip()
+    ]
+
+
+def _text_windows(text: str, *, max_chars: int, overlap_chars: int) -> list[str]:
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
+    if len(paragraphs) <= 1:
+        return _sliding_windows(text, max_chars=max_chars, overlap_chars=overlap_chars)
+
+    windows: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            windows.append(current)
+            overlap = current[-overlap_chars:].strip()
+            current = f"{overlap}\n\n{paragraph}".strip() if overlap else paragraph
+        else:
+            windows.extend(_sliding_windows(paragraph, max_chars=max_chars, overlap_chars=overlap_chars))
+            current = ""
+    if current:
+        windows.append(current)
+    return windows
+
+
+def _sliding_windows(text: str, *, max_chars: int, overlap_chars: int) -> list[str]:
+    windows = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        windows.append(text[start:end].strip())
+        if end >= len(text):
+            break
+        start = max(0, end - overlap_chars)
+    return [window for window in windows if window]
 
 
 def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSpec]:
@@ -84,7 +161,7 @@ def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSp
                         )
                     )
             if specs:
-                return specs
+                return expand_chunk_specs(specs)
         item_fields = [
             field
             for field in [
@@ -98,13 +175,13 @@ def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSp
         if not item_fields:
             fallback_body = text_field("正文", version.body)
             item_fields = [fallback_body] if fallback_body else []
-        return [
+        return expand_chunk_specs([
             ChunkSpec(
                 chunk_type="standard_script_scene",
                 text="\n".join([*common_fields, *item_fields]),
                 sort_order=1,
             )
-        ]
+        ])
 
     if content.content_type == ContentType.MUST_READ.value:
         update_body = payload.get("update_body") or version.body
@@ -117,13 +194,13 @@ def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSp
             ]
             if field
         ]
-        return [
+        return expand_chunk_specs([
             ChunkSpec(
                 chunk_type="must_read_update",
                 text="\n".join([*common_fields, *must_read_fields]),
                 sort_order=1,
             )
-        ]
+        ])
 
     base_fields = [
         field
@@ -133,13 +210,13 @@ def build_chunk_specs(content: Content, version: ContentVersion) -> list[ChunkSp
         ]
         if field
     ]
-    return [
+    return expand_chunk_specs([
         ChunkSpec(
             chunk_type="base_script_body",
             text="\n".join([*common_fields, *base_fields]),
             sort_order=1,
         )
-    ]
+    ])
 
 
 def replace_chunks_for_version(db: Session, *, content: Content, version: ContentVersion) -> list[ContentChunk]:

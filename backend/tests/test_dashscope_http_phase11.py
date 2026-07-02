@@ -87,6 +87,149 @@ def test_dashscope_http_client_calls_openai_compatible_embedding_and_chat() -> N
     assert "您好，请先说明您的核心需求。" in chat_request["payload"]["messages"][1]["content"]
 
 
+def test_dashscope_http_client_calls_ocr_model_with_data_url_image() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append({"path": request.url.path, "payload": payload})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "识别出的图片文字"}}]},
+        )
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+        dashscope_ocr_model="qwen-vl-ocr-2025-11-20",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client)
+        result = client.ocr_image(image_bytes=b"fake-image", mime_type="image/png")
+
+    assert result == "识别出的图片文字"
+    assert requests[0]["path"] == "/compatible-mode/v1/chat/completions"
+    assert requests[0]["payload"]["model"] == "qwen-vl-ocr-2025-11-20"
+    content = requests[0]["payload"]["messages"][0]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_dashscope_http_client_calls_qwen_plus_for_content_import_structure() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append({"path": request.url.path, "payload": payload})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"title": "导入标题"}, ensure_ascii=False),
+                        }
+                    }
+                ]
+            },
+        )
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+        dashscope_chat_model="qwen-plus",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client)
+        result = client.structure_content_import(
+            content_type="standard_script",
+            file_name="standard.docx",
+            parse_mode="fast",
+            raw_text="场景：价格异议",
+            warnings=["请核对数字"],
+        )
+
+    assert json.loads(result) == {"title": "导入标题"}
+    assert requests[0]["path"] == "/compatible-mode/v1/chat/completions"
+    assert requests[0]["payload"]["model"] == "qwen-plus"
+    assert requests[0]["payload"]["response_format"] == {"type": "json_object"}
+    assert "只能基于输入文本整理字段" in requests[0]["payload"]["messages"][0]["content"]
+    assert "standard_script" in requests[0]["payload"]["messages"][1]["content"]
+
+
+def test_dashscope_structure_import_uses_structure_model() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append({"path": request.url.path, "payload": payload})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"title": "Structured"}, ensure_ascii=False),
+                        }
+                    }
+                ]
+            },
+        )
+
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_base_url="https://dashscope.example/compatible-mode/v1",
+        dashscope_chat_model="chat-model",
+        dashscope_structure_model="structure-model",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = DashScopeHttpClient(settings, http_client=http_client)
+        client.structure_content_import(
+            content_type="base_script",
+            file_name="base.docx",
+            parse_mode="fast",
+            raw_text="source text",
+            warnings=[],
+        )
+
+    assert requests[0]["payload"]["model"] == "structure-model"
+
+
+def test_dashscope_default_http_client_allows_per_request_timeout(monkeypatch) -> None:
+    captured_kwargs: list[dict] = []
+
+    class SpyHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            captured_kwargs.append(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, _url, *, headers=None, json=None) -> httpx.Response:
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr("app.integrations.dashscope.httpx.Client", SpyHttpClient)
+    settings = Settings(
+        use_fake_external_clients=False,
+        dashscope_api_key="test-only-api-key",
+        dashscope_http_timeout_seconds=8.0,
+    )
+    client = DashScopeHttpClient(settings)
+
+    response = client._send("/embeddings", {"model": "text-embedding-v4", "input": "test"}, timeout_seconds=60.0)
+
+    assert response.status_code == 200
+    assert captured_kwargs == [{"timeout": 60.0, "trust_env": False}]
+
+
 def test_dashscope_default_http_client_ignores_proxy_environment(monkeypatch) -> None:
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")

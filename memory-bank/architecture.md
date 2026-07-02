@@ -30,6 +30,7 @@
 - `GET /api/auth/me`：返回当前登录用户。
 - `GET /api/admin/ping`：管理员权限探针。
 - `POST /api/admin/contents`：管理员创建内容草稿。
+- `POST /api/admin/content-import/parse`：管理员上传 `.docx`/`.pdf` 并解析为单条草稿和可选拆解候选；只返回解析结果，不创建内容、不发布、不写入向量索引。
 - `GET /api/admin/contents`：管理员内容列表，支持类型、状态、权限级别、分类和分页筛选。
 - `GET /api/admin/contents/{content_id}`：管理员内容详情。
 - `PATCH /api/admin/contents/{content_id}`：管理员编辑草稿字段，不改历史版本。
@@ -66,9 +67,9 @@
 - `README.md`：项目简介。
 
 ### 后端项目
-- `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 httpx 与 PyMilvus 运行依赖。
+- `backend/pyproject.toml`：后端包元数据、运行依赖、开发依赖、pytest 配置和 setuptools 包发现规则；包含 httpx、PyMilvus、python-multipart、python-docx 与 PyMuPDF 运行依赖。
 - `backend/app/__init__.py`：后端 Python 包标记。
-- `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员探针、内容、测验、RAG、未命中问题、账号管理路由和健康检查。
+- `backend/app/main.py`：FastAPI 应用工厂，注册统一错误处理、认证、管理员探针、内容、内容导入解析、测验、RAG、未命中问题、账号管理路由和健康检查。
 
 ### 后端核心
 - `backend/app/core/__init__.py`：核心模块包标记。
@@ -106,6 +107,7 @@
 - `backend/app/api/routes/admin.py`：管理员权限探针。
 - `backend/app/api/routes/auth.py`：登录接口和当前用户接口。
 - `backend/app/api/routes/content.py`：管理员内容管理、发布后索引同步、重试索引和员工最新必读/话术读取接口；历史版本响应补充发布人展示名和权限展示字段。
+- `backend/app/api/routes/content_import.py`：管理员 Word/PDF 导入解析接口，接收 multipart 文件、校验内容类型和解析模式，并复用后端管理员鉴权与 DashScope 依赖。
 - `backend/app/api/routes/quiz.py`：后台测验题管理接口和员工测验获取/提交接口。
 - `backend/app/api/routes/rag.py`：员工 AI 问答接口，调用 RAG 编排服务并返回回答、来源或未命中提示。
 - `backend/app/api/routes/missed_question.py`：后台未命中问题列表和标记已处理接口。
@@ -114,13 +116,17 @@
 - `backend/app/schemas/auth.py`：登录请求和登录响应模型。
 - `backend/app/schemas/user.py`：用户创建、编辑、密码重置输入和公开用户响应模型；员工密码至少 8 位，并校验账号类型和内容权限组合。
 - `backend/app/schemas/content.py`：内容创建、更新、管理员响应和分页响应模型，并承载类型相关字段校验。
+- `backend/app/schemas/content_import.py`：Word/PDF 导入解析响应模型，包含单条草稿、拆解候选、原始文本、解析方式、逐页选择信息和警告。
 - `backend/app/schemas/quiz.py`：测验题创建、更新和员工提交答案模型。
 - `backend/app/schemas/rag.py`：员工 RAG 问题请求模型。
 - `backend/app/services/__init__.py`：服务层包标记。
 - `backend/app/services/content_service.py`：内容创建、更新、列表、发布、下线、历史版本、当前版本 chunk 和员工可见性查询规则。
+- `backend/app/services/document_extractors.py`：DOCX/PDF 本地解析、表格文本化、PDF 页面渲染、OCR 页选择和本地/OCR 文本质量评分。
+- `backend/app/services/document_import_service.py`：导入解析编排，负责文件大小、扩展名、MIME、页数和 OCR 页数限制，并将解析失败映射为业务错误。
+- `backend/app/services/document_structuring_service.py`：调用 DashScope 文本结构化能力，把原始解析文本整理为内容草稿和拆解候选，并提供保守兜底拆分。
 - `backend/app/services/quiz_service.py`：测验题创建、更新、启停、列表、员工抽题和响应字典转换规则；后台响应包含关联内容标题和更新时间。
-- `backend/app/services/rag_index_service.py`：内容切片、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
-- `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、Milvus 向量召回、MySQL 关键词召回、候选融合去重、MySQL 来源回查、权限过滤、上下文生成和未命中处理。
+- `backend/app/services/rag_index_service.py`：内容切片、长文本检索窗口拆分、稳定 hash、当前版本 chunk 替换、embedding 调用、Milvus 写入和索引状态更新。
+- `backend/app/services/rag_answer_service.py`：RAG 问答编排，负责问题 embedding、Milvus 向量召回、MySQL 关键词召回、候选融合去重、MySQL 来源回查、权限过滤、相邻 chunk 上下文生成和未命中处理。
 - `backend/app/services/missed_question_service.py`：未命中问题记录、分页列表、响应转换和标记已处理。
 - `backend/app/services/user_service.py`：员工账号查询、用户名冲突检查、密码哈希、角色/权限组合校验、编辑、密码重置、禁用和启用；拒绝普通账号管理入口操作管理员账号。
 
@@ -130,7 +136,7 @@
 
 ### 后端外部集成
 - `backend/app/integrations/__init__.py`：外部集成模块包标记。
-- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding 抽象、假客户端、真实 OpenAI-compatible HTTP 客户端、严格来源提示词、API Key 检查和超时/认证/响应错误标准化；真实请求不读取系统代理环境，避免本地代理导致 HTTPS 链路抖动。
+- `backend/app/integrations/dashscope.py`：DashScope 聊天/embedding/OCR/内容导入结构化抽象、假客户端、真实 OpenAI-compatible HTTP 客户端、严格来源提示词、API Key 检查和超时/认证/响应错误标准化；真实请求不读取系统代理环境，避免本地代理导致 HTTPS 链路抖动。
 - `backend/app/integrations/milvus.py`：Milvus collection、向量写入、检索和失效抽象；提供按余弦相似度评分的内存假客户端用于自动化测试，并提供基于 PyMilvus `MilvusClient` 的真实客户端用于本地/生产写入。
 
 ### 端到端测试后端
@@ -161,7 +167,8 @@
 - `backend/tests/test_admin_users_phase9.py`：后台员工账号创建、列表、编辑、密码重置、禁用、启用、重复用户名、非管理员拒绝和管理员账号保护测试。
 - `backend/tests/test_admin_support_phase9.py`：阶段 9 后台展示契约测试，覆盖测验关联内容/更新时间和历史版本发布人展示名。
 - `backend/tests/test_e2e_fixture_phase10.py`：阶段 10 后端夹具准备测试，覆盖三类账号登录、跨权限内容/题目、确定性 RAG 命中和未命中、索引记录数量。
-- `backend/tests/test_dashscope_http_phase11.py`：使用 `httpx.MockTransport` 验证真实 DashScope embedding/chat 请求、响应解析和供应商错误映射，不访问外网。
+- `backend/tests/test_dashscope_http_phase11.py`：使用 `httpx.MockTransport` 验证真实 DashScope embedding/chat/OCR/内容导入结构化请求、响应解析和供应商错误映射，不访问外网。
+- `backend/tests/test_content_import_phase12.py`：Word/PDF 导入解析接口测试，覆盖管理员权限、文件类型拒绝、DOCX 文本/表格、DOCX 快速模式跳过图片 OCR、强制 DOCX 图片 OCR、PDF 增强 OCR、解析不落内容表和供应商异常映射。
 - `backend/tests/test_documentation_phase11.py`：检查本地开发、宝塔/ECS 部署和真实全链路手册包含阶段 11 必需配置与命令。
 - `backend/tests/test_initial_admin_cli_phase11.py`：验证初始管理员 CLI 创建/更新、Argon2 密码哈希、管理员角色和重新启用行为。
 
@@ -185,7 +192,7 @@
 - `frontend/src/stores/auth.ts`：Pinia 认证状态仓库，管理 token、用户身份、账号类型、内容权限级别、会话持久化和退出登录。
 - `frontend/src/api/client.ts`：Axios API client、Bearer token 注入、401 认证错误回调和统一错误归一化。
 - `frontend/src/api/auth.ts`：登录 API 封装，响应字段与后端 `LoginResponse` 对齐。
-- `frontend/src/api/admin-content.ts`：后台内容 API 和 TypeScript 契约，覆盖列表筛选分页、详情、创建、编辑、发布、下线、历史版本和索引重试。
+- `frontend/src/api/admin-content.ts`：后台内容 API 和 TypeScript 契约，覆盖列表筛选分页、详情、创建、编辑、发布、下线、历史版本、索引重试和 Word/PDF 导入解析。
 - `frontend/src/api/admin-quiz.ts`：后台测验题 API 和类型，覆盖列表、新建、编辑、启用和禁用。
 - `frontend/src/api/admin-users.ts`：后台员工账号 API 和类型，覆盖列表、新建、编辑、密码重置、禁用和启用。
 - `frontend/src/api/admin-missed-questions.ts`：后台未命中问题 API 和类型，覆盖状态筛选列表和标记已处理。
@@ -193,7 +200,7 @@
 - `frontend/src/pages/EmployeeHomePage.vue`：员工首页正文区域，承载员工共享布局下的今日入口提示。
 - `frontend/src/pages/AdminHomePage.vue`：后台首页，只提供后台模块入口提示；具体业务由 `/admin/*` 子页面承载。
 - `frontend/src/pages/admin/ContentListPage.vue`：后台内容列表，负责筛选、分页、状态标签、操作可见性、发布确认、下线确认和索引重试。
-- `frontend/src/pages/admin/ContentEditorPage.vue`：后台内容新建/编辑表单，按内容类型生成结构化载荷，保存后返回内容列表。
+- `frontend/src/pages/admin/ContentEditorPage.vue`：后台内容新建/编辑表单，按内容类型生成结构化载荷；新建时可上传 Word/PDF 解析并填入表单，也可保存勾选的拆解候选为草稿。
 - `frontend/src/pages/admin/ContentHistoryPage.vue`：后台历史版本页，展示版本号、标题、发布时间、发布人、权限和正文快照。
 - `frontend/src/pages/admin/QuizQuestionsPage.vue`：后台测验题列表与内联编辑器，支持新建、编辑和启停。
 - `frontend/src/pages/admin/UsersPage.vue`：后台账号列表与内联编辑器，支持员工账号新建、编辑、密码重置、禁用和启用；管理员账号只读。
@@ -207,7 +214,7 @@
 - `frontend/tests/login-page.test.ts`：登录表单校验、登录成功跳转、通用失败提示和移动端布局约束测试。
 - `frontend/tests/shared-ui.test.ts`：员工/后台布局、全局状态和复制反馈测试。
 - `frontend/tests/app-shell.test.ts`：移动和桌面布局横向溢出约束测试。
-- `frontend/tests/admin-content-phase9.test.ts`：后台内容筛选、分页、状态标签、操作入口、发布/下线/索引重试、编辑器字段和历史版本测试。
+- `frontend/tests/admin-content-phase9.test.ts`：后台内容筛选、分页、状态标签、操作入口、发布/下线/索引重试、编辑器字段、Word/PDF 导入和历史版本测试。
 - `frontend/tests/admin-operations-phase9.test.ts`：后台测验题、员工账号和未命中问题页面的创建、编辑、启停、重置、禁用、筛选和无统计看板测试。
 - `frontend/e2e/mvp-smoke.spec.ts`：阶段 10 浏览器冒烟测试，覆盖管理员发布、权限隔离、完整权限可见与 AI 检索、未命中回写和测验不持久化。
 
@@ -353,3 +360,44 @@
 - 抽样策略为“分层优先 + 层内稳定随机”：组间按 `priority desc`、关联内容当前版本发布时间或题目更新时间、版本/批次 id 排序；组内按 `sha256(refresh_seed + question.id)` 稳定打散。同一 seed 与同一候选集结果可复现，不同 seed 在同组内尽量变化。
 - `latest` 模式仍保留现有权限分路：通用账号只抽通用题；完整权限账号和管理员优先保留 1 道全量题，再用通用题补足，不足时继续补全量题。`review` 模式继续支持分类过滤。
 - 前端 `QuizPage` 每次首次加载、切换模式、切换分类和点击“重新抽题”都会生成新的 `refresh_seed`，提交答案仍只按当前题目 id 提交，提交后选项锁定；按钮旁增加“题库较少时可能抽到相同题目”的弱提示。
+
+## 2026-06-30 Word/PDF 导入解析与 OCR 补充
+
+- 后台内容新建页新增 Word/PDF 导入区，管理员先选择内容类型，再上传 `.docx` 或 `.pdf`，可选快速解析、增强解析和强制 OCR。解析结果只填入当前表单或作为候选草稿保存，不自动发布，不进入员工端，不写入 Milvus。
+- 新增 `POST /api/admin/content-import/parse`，仅管理员可访问。接口接收 multipart 文件，拒绝 `.doc`、`.wps`、图片等非本期范围文件，默认 20MB 文件上限、80 页 PDF 上限、30 页 OCR 上限。
+- DOCX 解析优先使用 `python-docx` 本地提取段落和表格；快速模式下若段落/表格已抽取到正文，则跳过内嵌图片 OCR 并返回“快速解析未执行图片 OCR”的核对警告，避免普通 Word 导入被图片 OCR 拖到前端超时。只有勾选强制 OCR 或 DOCX 无本地正文时，才会调用 `qwen-vl-ocr-2025-11-20` 识别内嵌大图并合并到原始文本。PDF 解析使用 PyMuPDF 本地抽取文本，增强模式或低质量文本页会渲染页面图片并 OCR，再按质量评分选择本地文本或 OCR 文本。
+- DOCX 内嵌图片 OCR 属于增强能力，不是本地文本抽取的硬依赖。若强制 OCR 时图片 OCR 失败，接口仍返回草稿并给出“图片 OCR 失败”的核对警告。若 `qwen-plus` 结构化整理失败或返回非 JSON，接口也返回基于本地解析文本的保守草稿，并提示管理员人工核对字段，避免把可编辑正文丢成 503。
+- DashScope 集成扩展为 embedding、chat、OCR 和内容导入结构化四类调用。OCR 使用 `qwen-vl-ocr-2025-11-20`，结构化整理仍用 `qwen-plus` 的 JSON 输出，提示词要求尽量保留原文，不凭空补充业务事实。
+- 结构化服务始终返回 `single_draft`，并在文档较长或模型返回多段时提供 `split_suggestions`。前端高/中置信候选默认勾选，管理员选择权限级别和可见范围后，可点击“保存选中为草稿”，仍复用现有 `POST /api/admin/contents`，由既有内容校验保证标准化话术和最新必读必填字段。
+- 前端导入解析请求在 `frontend/src/api/admin-content.ts` 单独使用 120 秒 timeout，避免复用全局 15 秒 API 超时导致“请求等待时间较长”提前返回；后端仍负责文件大小、页数和 OCR 页数边界控制。
+- 内容发布索引补充长文本检索窗口：逻辑 chunk 超过约 1100 字时会按 180 字重叠拆成多个 active chunk，每个窗口保留标题、分类、摘要等上下文前缀；短内容保持原有单 chunk 行为。AI 回答从命中 chunk 回查时，会在权限和范围过滤后拼接同内容相邻 chunk，减少长文命中局部导致回答断裂。
+- 本轮验证基线：后端 `.\.venv\Scripts\python.exe -m pytest backend\tests\test_content_import_phase12.py backend\tests\test_dashscope_http_phase11.py backend\tests\test_rag_index_phase6.py backend\tests\test_rag_phase6.py` 为 `49 passed`；前端 `corepack.cmd pnpm exec vitest run tests/admin-content-phase9.test.ts` 为 `14 passed`；前端 `corepack.cmd pnpm run build` 通过。
+
+## 2026-07-01 Word/PDF 导入修订
+
+- DashScope 模型和超时已拆为任务级配置：`DASHSCOPE_CHAT_MODEL`、`DASHSCOPE_STRUCTURE_MODEL`、`DASHSCOPE_QUIZ_MODEL`、`DASHSCOPE_OCR_MODEL`、`DASHSCOPE_VISION_MODEL` 以及 `DASHSCOPE_HTTP_TIMEOUT_SECONDS`、`DASHSCOPE_IMPORT_TIMEOUT_SECONDS`、`DASHSCOPE_OCR_TIMEOUT_SECONDS`、`DASHSCOPE_QUIZ_TIMEOUT_SECONDS`。默认结构化和候选题生成使用 `qwen-plus`，OCR 使用 `qwen-vl-ocr-2025-11-20`，视觉模型预留为 `qwen3.6-plus`。
+- DOCX 导入不再因为本地段落/表格存在而跳过内嵌图片 OCR。`python-docx` 本地文本仍作为主路径，符合大小阈值的内嵌图片会进入 OCR；单张图片 OCR 失败时保留本地文本并在 `parse_trace.ocr_failed_count` 与 warnings 中标记，不再把整次导入打成 503。
+- `POST /api/admin/content-import/parse` 响应新增 `parse_trace`、`extraction_warnings`、`structure_warnings`、`structure_status`、`structure_error_code` 和 `structure_error_message`。AI 结构化超时、非 JSON、字段无效等情况统一返回本地保守草稿，并给出机器可读错误码，前端据此提示管理员核对字段。
+- 后台内容新建页将“人工添加”和“从 Word/PDF 导入”做成模式入口；导入模式显示同步请求阶段进度、OCR 统计和结构化状态。导入成功仍填充同一套内容类型专属字段窗口：最新必读填充更新正文/调整要点，核心基础话术填充基础字段，标准化话术填充场景/推荐话术/禁用话术/注意事项。
+- 最新必读详情页正文使用 `white-space: pre-wrap` 保留换行格式，避免发布后的导入正文被压成一段。
+- 候选题生成批次和实际 DashScope 调用改用 `DASHSCOPE_QUIZ_MODEL` 与 `DASHSCOPE_QUIZ_TIMEOUT_SECONDS`，避免复用高延迟视觉模型和短默认超时导致“生成后选题”系统性失败。
+- 本轮验证：后端 `\.venv\Scripts\python.exe -m pytest backend/tests/test_dashscope_http_phase11.py backend/tests/test_content_import_phase12.py backend/tests/test_quiz_phase2_phase3.py backend/tests/test_quiz_phase5.py -q`、`\.venv\Scripts\python.exe -m pytest backend/tests/test_integrations_phase6.py backend/tests/test_rag_phase6.py backend/tests/test_rag_index_phase6.py -q` 通过；前端 `corepack.cmd pnpm exec vitest run tests/admin-content-phase9.test.ts` 和 `corepack.cmd pnpm build` 通过。
+
+## 2026-07-01 Word/PDF 导入后续修复
+
+- 内容导入拆解候选响应补充 `validation_status`、`is_saveable`、`missing_fields` 和 `quality_warnings`，后端会按内容类型字段契约标记能否直接保存。标准化话术候选必须具备标题、分类、摘要、正文、场景和推荐说法；最新必读和核心基础话术默认不自动拆解。
+- 结构化提示词显式声明三类内容的必填字段和禁止模型推断的字段；标准化话术拆解要求章节标题归属后续内容。后端兜底拆分也会修正“块尾残留下一节标题”的边界问题，并给出人工核对警告。
+- 后台导入页的拆解候选区新增状态展示和详情编辑。管理员可以查看候选完整正文、缺失字段和质量警告，补齐字段后更新候选；保存选中候选时只创建合格草稿，未合格候选会留在页面并明确列出缺失字段。
+- 导入进度条改为“缓慢推进 + 结果返回后快速完成”的混合进度：请求未返回前最高推进到 88%，避免 300ms 内跳到高进度造成假完成感；失败时保留失败阶段提示。
+- 后台内容列表新增 `DELETE /api/admin/contents/{content_id}` 草稿删除入口，仅允许管理员删除从未发布过的草稿。已发布或有当前版本的内容不能删除，只能下线，避免破坏历史版本和索引来源。
+- 后端新增 `GET /api/admin/content-scenes`，仅管理员可访问，从标准化话术草稿和当前版本结构化字段中读取历史 `scene`，去空、去重并限制最多 100 条；内容编辑页和拆解候选详情页的“场景/候选场景”字段使用原生 `select` 复用这些历史场景。
+- 拆解候选详情从列表下方内联展示改为页面内模态窗，候选卡片使用固定网格和可换行标题，避免长标题、勾选框和“缺少字段”状态挤压错位；管理员点击“查看并编辑”会直接看到完整正文、缺失字段和可编辑字段。
+- 后台内容列表发布流程从浏览器原生 `confirm + prompt` 改为页面内发布弹窗，弹窗展示标题、类型、可见范围、权限级别和发布影响范围，并要求选择更新级别、填写可选变更摘要；取消不触发 API，确认发布仍调用既有 `POST /api/admin/contents/{content_id}/publish`。
+- 拆解候选卡片的勾选框使用独立紧凑样式，避免继承后台表单全局输入框 `width: 100%` 后把候选标题挤成竖排。候选标题来源是结构化响应的 `split_suggestions[].title`，不是摘要或正文。
+- 拆解候选详情中的“候选分类”使用原生 `select`，复用内容分类建议集合；单条草稿仍填入下方主表单，主表单“分类”和标准化话术“场景”也使用原生 `select`，不再使用浏览器兼容性较弱的 `input + datalist`。
+- 拆解候选卡片内也直接展示“候选分类”和标准化话术的“候选场景”字段，均使用原生 `select`。管理员在候选卡片里修改分类或场景后，会立即更新该候选的结构化 payload 并重新计算缺失字段、可保存状态和保存草稿 payload；导入或 AI 结构化产生的当前值会临时加入选项集合，避免切换为 `select` 后丢失已填值。
+- 当前分类/场景建议集合仍属于 MVP 级实现：后端从最近更新的 `contents` 记录中限量读取、去重后返回，不新增权威字典表；大规模生产场景应升级为独立内容分类/场景字典表或物化字典，并按写入侧维护、读侧索引/缓存查询。
+- 员工端话术详情页对基础话术正文和标准化话术的推荐说法、禁用说法、注意事项使用 `white-space: pre-wrap`，与最新必读详情页一致保留 Word/PDF 导入正文的段落换行；发布快照仍按纯文本存储，复制文本不改变。
+- 本轮验证：后端 `.\.venv\Scripts\python.exe -m pytest backend\tests\test_content_import_phase12.py backend\tests\test_admin_content_phase4.py -q` 通过；前端 `corepack.cmd pnpm exec vitest run tests/admin-content-phase9.test.ts` 为 `18 passed`；前端 `corepack.cmd pnpm build` 通过。
+- 本轮增量验证：后端 `.\.venv\Scripts\python.exe -m pytest backend\tests\test_admin_content_phase4.py -q` 为 `14 passed`；前端 `corepack.cmd pnpm exec vitest run tests/admin-content-phase9.test.ts` 为 `20 passed`；前端 `corepack.cmd pnpm build` 通过；内置浏览器在 `http://127.0.0.1:5173/admin/contents` 验证发布按钮打开页面内弹窗且无原生 JS 弹窗，取消后关闭；在 `/admin/contents/new` 验证标准化话术“场景”字段绑定 `content-scene-options` 并读取到历史场景选项。
+- 本轮候选卡片修复验证：前端 `corepack.cmd pnpm exec vitest run tests/admin-content-phase9.test.ts` 为 `20 passed`；前端 `corepack.cmd pnpm build` 通过；内置浏览器当前页无拆解候选 DOM，已确认主表单“分类/场景”仍绑定对应 datalist，拆解候选弹窗由组件测试覆盖候选分类/候选场景历史选项和紧凑复选框结构。

@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_content_visible, get_current_user, get_dashscope_client, get_milvus_client, require_admin
@@ -13,9 +13,11 @@ from app.schemas.content import ContentCreate, ContentPublishRequest, ContentUpd
 from app.services.content_service import (
     content_to_admin_dict,
     create_content,
+    delete_draft_content,
     employee_content_query,
     get_content_or_404,
     list_content_categories,
+    list_content_scenes,
     list_admin_contents,
     list_versions,
     offline_content,
@@ -80,6 +82,14 @@ def admin_list_content_categories(
     return {"items": list_content_categories(db)}
 
 
+@router.get("/api/admin/content-scenes")
+def admin_list_content_scenes(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"items": list_content_scenes(db)}
+
+
 @router.get("/api/admin/contents/{content_id}")
 def admin_get_content(
     content_id: int,
@@ -97,6 +107,16 @@ def admin_update_content(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return content_summary(update_content(db, content_id=content_id, payload=payload))
+
+
+@router.delete("/api/admin/contents/{content_id}", status_code=204)
+def admin_delete_content_draft(
+    content_id: int,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    delete_draft_content(db, content_id=content_id)
+    return Response(status_code=204)
 
 
 @router.post("/api/admin/contents/{content_id}/publish")

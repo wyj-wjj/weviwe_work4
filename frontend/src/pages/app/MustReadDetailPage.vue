@@ -44,7 +44,7 @@ onMounted(async () => {
 
       <section>
         <h3>更新正文</h3>
-        <p>{{ item.update_body }}</p>
+        <p class="preserved-text">{{ item.update_body }}</p>
       </section>
 
       <section>
@@ -91,5 +91,9 @@ onMounted(async () => {
 
 .detail-page header strong {
   color: #1d4ed8;
+}
+
+.preserved-text {
+  white-space: pre-wrap;
 }
 </style>

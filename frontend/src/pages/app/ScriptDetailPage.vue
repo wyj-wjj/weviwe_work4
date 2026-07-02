@@ -54,16 +54,16 @@ onMounted(async () => {
         </section>
         <section>
           <h3>推荐说法</h3>
-          <p>{{ script.recommended_speech }}</p>
+          <p class="preserved-text">{{ script.recommended_speech }}</p>
           <CopyButton label="复制推荐说法" :text="recommendedSpeech" />
         </section>
         <section>
           <h3>禁用说法</h3>
-          <p>{{ script.forbidden_speech }}</p>
+          <p class="preserved-text">{{ script.forbidden_speech }}</p>
         </section>
         <section>
           <h3>注意事项</h3>
-          <p>{{ script.notes }}</p>
+          <p class="preserved-text">{{ script.notes }}</p>
         </section>
         <CopyButton label="复制完整条目" :text="script.copy_text" />
       </template>
@@ -77,7 +77,7 @@ onMounted(async () => {
         </section>
         <section>
           <h3>完整话术</h3>
-          <p>{{ script.body }}</p>
+          <p class="preserved-text">{{ script.body }}</p>
         </section>
         <CopyButton label="复制完整话术" :text="script.copy_text" />
       </template>
@@ -118,5 +118,9 @@ onMounted(async () => {
 
 .script-detail header strong {
   color: #1d4ed8;
+}
+
+.preserved-text {
+  white-space: pre-wrap;
 }
 </style>

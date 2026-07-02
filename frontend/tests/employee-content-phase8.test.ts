@@ -231,6 +231,9 @@ test('standard script detail renders speech fields and copies rendered text', as
   expect(getByText('建议先说明风险等级。')).toBeInTheDocument()
   expect(getByText('不能承诺收益。')).toBeInTheDocument()
   expect(getByText('必要时转交主管。')).toBeInTheDocument()
+  expect(getByText('建议先说明风险等级。')).toHaveClass('preserved-text')
+  expect(getByText('不能承诺收益。')).toHaveClass('preserved-text')
+  expect(getByText('必要时转交主管。')).toHaveClass('preserved-text')
   expect(getByText('更新时间：2026-06-17 19:00')).toBeInTheDocument()
   expect(getByText('更新级别：中更新')).toBeInTheDocument()
 
@@ -246,4 +249,28 @@ test('standard script detail renders speech fields and copies rendered text', as
     configurable: true,
     value: originalClipboard,
   })
+})
+
+test('script detail preserves imported paragraph breaks after publish', async () => {
+  mockedGetScript.mockResolvedValue({
+    id: 94,
+    title: '纬景Token电池基本话术介绍（初稿）',
+    content_type: 'base_script',
+    category: '产品介绍',
+    permission_level: 'general',
+    update_level: 'major',
+    summary_points: ['AI时代，电力确定性'],
+    body: '第一部分：AI时代，电力确定性\n\n1.1 AI市场爆发\n正文第一段。\n\n1.2 AIDC基建热潮\n正文第二段。',
+    updated_at: '2026-07-02T01:11:00',
+    copy_text:
+      '第一部分：AI时代，电力确定性\n\n1.1 AI市场爆发\n正文第一段。\n\n1.2 AIDC基建热潮\n正文第二段。',
+  })
+
+  const { getByText } = await renderAppPage(ScriptDetailPage, '/app/scripts/94')
+
+  await waitFor(() => {
+    expect(getByText('纬景Token电池基本话术介绍（初稿）')).toBeInTheDocument()
+  })
+  const body = getByText((content) => content.includes('1.1 AI市场爆发'))
+  expect(body).toHaveClass('preserved-text')
 })

@@ -217,6 +217,26 @@ def source_from_chunk(chunk: ContentChunk, *, relevance_score: float) -> dict[st
     }
 
 
+def adjacent_authorized_chunks(db: Session, *, chunk: ContentChunk, user: User) -> list[ContentChunk]:
+    allowed_levels = visible_levels_for(user)
+    stmt = (
+        select(ContentChunk)
+        .where(ContentChunk.content_id == chunk.content_id)
+        .where(ContentChunk.version_id == chunk.version_id)
+        .where(ContentChunk.is_active.is_(True))
+        .where(ContentChunk.sort_order.in_([chunk.sort_order - 1, chunk.sort_order, chunk.sort_order + 1]))
+        .order_by(ContentChunk.sort_order.asc(), ContentChunk.id.asc())
+    )
+    chunks = []
+    for candidate in db.scalars(stmt).all():
+        if (
+            candidate.permission_level in allowed_levels
+            and scope_is_visible(user, candidate.scope_type, candidate.department_id)
+        ):
+            chunks.append(candidate)
+    return chunks
+
+
 def load_authorized_contexts(
     db: Session,
     *,
@@ -254,19 +274,23 @@ def load_authorized_contexts(
         if hit.score < best_authorized_score - RELATIVE_SCORE_WINDOW:
             continue
 
+        context_chunks = adjacent_authorized_chunks(db, chunk=chunk, user=user)
         existing_context = contexts_by_content_id.get(content.id)
         if existing_context is None:
+            context_text = "\n\n".join(candidate.chunk_text for candidate in context_chunks)
             existing_context = {
-                "text": chunk.chunk_text,
+                "text": context_text,
                 "source": source_from_chunk(chunk, relevance_score=hit.score),
             }
             contexts_by_content_id[content.id] = existing_context
-            seen_texts_by_content_id[content.id] = {chunk.chunk_text}
+            seen_texts_by_content_id[content.id] = {candidate.chunk_text for candidate in context_chunks}
             contexts.append(existing_context)
-        elif chunk.chunk_text not in seen_texts_by_content_id[content.id]:
-            existing_context["text"] = f"{existing_context['text']}\n\n{chunk.chunk_text}"
-            seen_texts_by_content_id[content.id].add(chunk.chunk_text)
-        seen_chunk_ids.add(chunk.id)
+        else:
+            for context_chunk in context_chunks:
+                if context_chunk.chunk_text not in seen_texts_by_content_id[content.id]:
+                    existing_context["text"] = f"{existing_context['text']}\n\n{context_chunk.chunk_text}"
+                    seen_texts_by_content_id[content.id].add(context_chunk.chunk_text)
+        seen_chunk_ids.update(candidate.id for candidate in context_chunks)
     return contexts
 
 

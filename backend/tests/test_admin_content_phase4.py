@@ -138,6 +138,80 @@ def test_admin_content_categories_returns_trimmed_distinct_history_and_rejects_n
     assert rejected.status_code == 403
 
 
+def test_admin_content_scenes_returns_trimmed_distinct_standard_script_history_and_rejects_non_admin(
+    client,
+    admin_headers,
+    full_user_headers,
+):
+    client.post(
+        "/api/admin/contents",
+        json=standard_payload(title="价格一", structured_payload={"scene": "价格异议", "recommended_speech": "解释价值"}),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=standard_payload(title="价格二", structured_payload={"scene": " 价格异议 ", "recommended_speech": "解释方案"}),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=standard_payload(title="回款", structured_payload={"scene": "回款催收", "recommended_speech": "确认账期"}),
+        headers=admin_headers,
+    )
+    client.post(
+        "/api/admin/contents",
+        json=base_payload(title="基础", structured_payload={"scene": "不应进入", "points": ["基础"]}),
+        headers=admin_headers,
+    )
+
+    response = client.get("/api/admin/content-scenes", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["items"].count("价格异议") == 1
+    assert set(response.json()["items"]) == {"价格异议", "回款催收"}
+
+    rejected = client.get("/api/admin/content-scenes", headers=full_user_headers)
+    assert rejected.status_code == 403
+
+
+def test_admin_can_delete_never_published_draft(client, admin_headers, db_session):
+    created = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers)
+    assert created.status_code == 201
+    content_id = created.json()["id"]
+
+    response = client.delete(f"/api/admin/contents/{content_id}", headers=admin_headers)
+
+    assert response.status_code == 204
+    assert db_session.get(Content, content_id) is None
+    listing = client.get("/api/admin/contents", headers=admin_headers)
+    assert all(item["id"] != content_id for item in listing.json()["items"])
+
+
+def test_admin_cannot_delete_published_content(client, admin_headers, db_session):
+    created = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers)
+    assert created.status_code == 201
+    content_id = created.json()["id"]
+    published = client.post(f"/api/admin/contents/{content_id}/publish", headers=admin_headers)
+    assert published.status_code == 200
+
+    response = client.delete(f"/api/admin/contents/{content_id}", headers=admin_headers)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "draft_delete_forbidden"
+    assert db_session.get(Content, content_id) is not None
+
+
+def test_non_admin_cannot_delete_draft(client, admin_headers, general_user_headers, db_session):
+    created = client.post("/api/admin/contents", json=base_payload(), headers=admin_headers)
+    assert created.status_code == 201
+    content_id = created.json()["id"]
+
+    response = client.delete(f"/api/admin/contents/{content_id}", headers=general_user_headers)
+
+    assert response.status_code == 403
+    assert db_session.get(Content, content_id) is not None
+
+
 def test_draft_revision_changes_only_when_stored_draft_fields_change(
     client,
     admin_headers,

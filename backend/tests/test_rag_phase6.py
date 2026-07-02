@@ -380,6 +380,68 @@ def test_authorized_contexts_sort_by_score_and_drop_weak_relative_matches(db_ses
     assert [context["source"]["relevance_score"] for context in contexts] == [0.91, 0.89]
 
 
+def test_authorized_contexts_expand_hit_with_adjacent_chunks(db_session) -> None:
+    admin = make_user(db_session, username="adjacent-admin", account_type="admin", content_level="full")
+    user = make_user(db_session, username="adjacent-user", account_type="general_user", content_level="general")
+    content = create_content(
+        db_session,
+        creator=admin,
+        payload=ContentCreate(
+            content_type=ContentType.BASE_SCRIPT,
+            title="Chunked Script",
+            category="sales",
+            permission_level=ContentLevel.GENERAL,
+            body="完整长正文",
+            structured_payload={"points": ["要点"]},
+        ),
+    )
+    publish_content(db_session, content_id=content.id)
+    db_session.refresh(content)
+    chunks = [
+        ContentChunk(
+            content_id=content.id,
+            version_id=content.current_version_id,
+            chunk_type="base_script_body",
+            chunk_text=f"相邻片段 {index}",
+            sort_order=index,
+            token_estimate=10,
+            content_hash=stable_content_hash(f"相邻片段 {index}"),
+            permission_level=ContentLevel.GENERAL.value,
+            scope_type="global",
+            department_id=None,
+            is_active=True,
+        )
+        for index in range(1, 4)
+    ]
+    db_session.add_all(chunks)
+    db_session.commit()
+    for chunk in chunks:
+        db_session.refresh(chunk)
+
+    contexts = load_authorized_contexts(
+        db_session,
+        hits=[
+            MilvusSearchHit(
+                primary_key="middle",
+                score=0.92,
+                metadata={
+                    "content_id": content.id,
+                    "chunk_id": chunks[1].id,
+                    "permission_level": "general",
+                    "is_active": True,
+                },
+            )
+        ],
+        user=user,
+        min_score=0.7,
+    )
+
+    assert len(contexts) == 1
+    assert "相邻片段 1" in contexts[0]["text"]
+    assert "相邻片段 2" in contexts[0]["text"]
+    assert "相邻片段 3" in contexts[0]["text"]
+
+
 def test_rag_merges_same_content_chunks_into_one_context_and_source(db_session) -> None:
     admin = make_user(db_session, username="merge-admin", account_type="admin", content_level="full")
     user = make_user(db_session, username="merge-user", account_type="general_user", content_level="general")
