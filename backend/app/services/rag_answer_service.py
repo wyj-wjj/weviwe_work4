@@ -1,12 +1,11 @@
+import json
 from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.errors import AppError
 from app.domain.enums import ContentStatus
-from app.integrations.dashscope import normalize_provider_error
 from app.integrations.milvus import MilvusSearchHit
 from app.models.content import Content, ContentChunk, ContentVersion
 from app.models.user import User
@@ -20,8 +19,6 @@ QUERY_EXPANSIONS = (
     (("项目环境影响", "环境影响", "环评"), "储能项目环境影响评价 环评 合规 噪声 危废 防火间距"),
 )
 RELATIVE_SCORE_WINDOW = 0.12
-FAST_ANSWER_MAX_CONTEXTS = 3
-FAST_ANSWER_MAX_CHARS_PER_SOURCE = 360
 KEYWORD_SEARCH_BASE_SCORE = 0.68
 KEYWORD_SEARCH_MAX_SCORE = 0.95
 KEYWORD_SEARCH_FETCH_MULTIPLIER = 4
@@ -189,16 +186,6 @@ def merge_retrieval_hits(*hit_groups: list[MilvusSearchHit]) -> list[MilvusSearc
     return sorted([*hits_by_chunk_id.values(), *passthrough_hits], key=lambda hit: hit.score, reverse=True)
 
 
-def provider_unavailable(exc: Exception) -> AppError:
-    provider_error = normalize_provider_error(exc)
-    return AppError(
-        code="ai_unavailable",
-        message="智能问答暂不可用，请稍后重试。",
-        status_code=503,
-        details={"provider_error": provider_error.code},
-    )
-
-
 def source_from_chunk(chunk: ContentChunk, *, relevance_score: float) -> dict[str, Any]:
     version = chunk.version
     content = chunk.content
@@ -254,7 +241,7 @@ def load_authorized_contexts(
         if hit.score < min_score:
             continue
         chunk_id = hit.metadata.get("chunk_id")
-        if not isinstance(chunk_id, int) or chunk_id in seen_chunk_ids:
+        if not isinstance(chunk_id, int):
             continue
         chunk = db.get(ContentChunk, chunk_id)
         if chunk is None or not chunk.is_active:
@@ -274,51 +261,34 @@ def load_authorized_contexts(
         if hit.score < best_authorized_score - RELATIVE_SCORE_WINDOW:
             continue
 
-        context_chunks = adjacent_authorized_chunks(db, chunk=chunk, user=user)
         existing_context = contexts_by_content_id.get(content.id)
+        
+        if chunk_id in seen_chunk_ids:
+            if existing_context is not None:
+                if chunk.chunk_text not in existing_context.get("hit_texts", []):
+                    existing_context.setdefault("hit_texts", []).append(chunk.chunk_text)
+            continue
+
+        context_chunks = adjacent_authorized_chunks(db, chunk=chunk, user=user)
+
         if existing_context is None:
             context_text = "\n\n".join(candidate.chunk_text for candidate in context_chunks)
             existing_context = {
                 "text": context_text,
                 "source": source_from_chunk(chunk, relevance_score=hit.score),
+                "hit_texts": [chunk.chunk_text],
             }
             contexts_by_content_id[content.id] = existing_context
             seen_texts_by_content_id[content.id] = {candidate.chunk_text for candidate in context_chunks}
             contexts.append(existing_context)
         else:
+            existing_context["hit_texts"].append(chunk.chunk_text)
             for context_chunk in context_chunks:
                 if context_chunk.chunk_text not in seen_texts_by_content_id[content.id]:
                     existing_context["text"] = f"{existing_context['text']}\n\n{context_chunk.chunk_text}"
                     seen_texts_by_content_id[content.id].add(context_chunk.chunk_text)
         seen_chunk_ids.update(candidate.id for candidate in context_chunks)
     return contexts
-
-
-def compact_source_text(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    useful_lines = [
-        line
-        for line in lines
-        if not line.startswith(("标题：", "分类："))
-    ]
-    compact = "；".join(useful_lines[:6])
-    if len(compact) > FAST_ANSWER_MAX_CHARS_PER_SOURCE:
-        return f"{compact[:FAST_ANSWER_MAX_CHARS_PER_SOURCE].rstrip()}……"
-    return compact
-
-
-def build_fast_answer(*, contexts: list[dict[str, Any]]) -> str:
-    bullets: list[str] = []
-    for index, context in enumerate(contexts[:FAST_ANSWER_MAX_CONTEXTS], start=1):
-        source = context.get("source") if isinstance(context.get("source"), dict) else {}
-        title = source.get("title") or f"来源 {index}"
-        text = context.get("text") or ""
-        compact_text = compact_source_text(str(text))
-        if compact_text:
-            bullets.append(f"{index}. {title}：{compact_text}")
-    if not bullets:
-        return "已命中当前权限内的标准话术，但来源正文为空，请联系管理员核对内容。"
-    return "根据当前已发布且有权限的话术资料，快速整理如下：\n" + "\n".join(bullets)
 
 
 def answer_question(
@@ -329,7 +299,7 @@ def answer_question(
     dashscope_client,
     milvus_client,
     settings: Settings | None = None,
-) -> dict[str, Any]:
+):
     resolved_settings = settings or Settings()
     try:
         question_embedding = dashscope_client.embed_text(retrieval_question(question))
@@ -342,7 +312,8 @@ def answer_question(
             top_k=resolved_settings.rag_top_k,
         )
     except Exception as exc:
-        raise provider_unavailable(exc) from exc
+        yield f"data: {json.dumps({'type': 'error', 'message': '智能问答暂不可用，请稍后重试。'})}\n\n"
+        return
 
     keyword_hits = keyword_search_hits(
         db,
@@ -359,11 +330,22 @@ def answer_question(
     )
     if not contexts:
         record_missed_question(db, question=question, user=user)
-        return {"hit": False, "answer": MISSED_MESSAGE, "sources": []}
+        yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+        yield f"data: {json.dumps({'type': 'content', 'text': MISSED_MESSAGE})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        return
 
-    return {
-        "hit": True,
-        "answer": build_fast_answer(contexts=contexts),
-        "sources": [context["source"] for context in contexts],
-        "usage": {"mode": "fast_extractive"},
-    }
+    sources = [context["source"] for context in contexts]
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+
+    try:
+        for chunk in dashscope_client.generate_answer_stream(
+            question=question,
+            contexts=contexts,
+        ):
+            yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+    except Exception as exc:
+        yield f"data: {json.dumps({'type': 'error', 'message': '生成回答时发生错误，请稍后重试。'})}\n\n"
+        return
+        
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
