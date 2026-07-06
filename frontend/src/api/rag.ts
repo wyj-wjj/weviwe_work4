@@ -31,7 +31,8 @@ export async function askRagStream(
   const token = auth.token;
   
   try {
-    const response = await fetch('/api/app/rag/ask', {
+    const baseURL = import.meta.env.VITE_API_BASE_URL || '/api';
+    const response = await fetch(`${baseURL}/app/rag/ask`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
