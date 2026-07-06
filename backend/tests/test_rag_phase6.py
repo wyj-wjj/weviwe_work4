@@ -1,3 +1,4 @@
+import json
 import pytest
 from sqlalchemy import select
 
@@ -28,6 +29,16 @@ def make_user(db_session, *, username: str, account_type: str, content_level: st
     db_session.commit()
     db_session.refresh(user)
     return user
+
+
+def consume_stream(generator):
+    events = []
+    for item in generator:
+        if isinstance(item, bytes):
+            item = item.decode("utf-8")
+        if item.startswith("data: "):
+            events.append(json.loads(item[6:].strip()))
+    return events
 
 
 def publish_indexed_content(
@@ -117,24 +128,29 @@ def test_rag_filters_mixed_milvus_candidates_and_uses_only_authorized_context(db
     ]
     dashscope = FakeDashScopeClient(chat_answer="Use the approved greeting.", embedding=[0.2, 0.2, 0.2])
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=general_user,
         question="How should I greet a customer?",
         dashscope_client=dashscope,
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
-    assert result["hit"] is True
+    assert any(e.get("type") == "sources" for e in events)
     assert dashscope.embedding_requests == ["How should I greet a customer?"]
     assert milvus.search_requests[-1].allowed_permission_levels == {"general"}
-    assert [source["content_id"] for source in result["sources"]] == [general_content_id]
-    assert dashscope.chat_requests == []
-    assert "Greet customers" in result["answer"]
-    assert "Full permission pricing policy" not in result["answer"]
+    
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert [source["content_id"] for source in sources_event["sources"]] == [general_content_id]
+    assert dashscope.chat_requests[0]["question"] == "How should I greet a customer?"
+    
+    content_text = "".join(e.get("text", "") for e in events if e.get("type") == "content")
+    assert "Use the approved greeting." in content_text
+    assert "Full permission pricing policy" not in content_text
 
 
-def test_rag_returns_fast_extractive_answer_without_waiting_for_chat_generation(db_session) -> None:
+def test_rag_yields_sources_then_error_on_chat_generation_failure(db_session) -> None:
     admin = make_user(db_session, username="fast-admin", account_type="admin", content_level="full")
     general_user = make_user(db_session, username="fast-general", account_type="general_user", content_level="general")
     milvus = FakeMilvusClient()
@@ -161,21 +177,23 @@ def test_rag_returns_fast_extractive_answer_without_waiting_for_chat_generation(
     ]
     dashscope = FakeDashScopeClient(
         embedding=[0.2, 0.2, 0.2],
-        chat_error=ProviderTimeoutError("chat should not block fast answer"),
+        chat_error=ProviderTimeoutError("chat error"),
     )
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=general_user,
         question="How fast can this answer?",
         dashscope_client=dashscope,
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
-    assert result["hit"] is True
-    assert "Fast approved safety answer" in result["answer"]
-    assert result["sources"][0]["content_id"] == content_id
-    assert dashscope.chat_requests == []
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert sources_event["sources"][0]["content_id"] == content_id
+    
+    error_event = next(e for e in events if e.get("type") == "error")
+    assert "生成回答时发生错误" in error_event["message"]
 
 
 def test_environment_impact_short_question_expands_to_eia_terms() -> None:
@@ -221,19 +239,25 @@ def test_hybrid_retrieval_uses_keyword_and_vector_results_together(db_session) -
     ]
     dashscope = FakeDashScopeClient(embedding=[0.2, 0.2, 0.2])
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=general_user,
         question="消防相关话术",
         dashscope_client=dashscope,
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
-    source_ids = {source["content_id"] for source in result["sources"]}
-    assert result["hit"] is True
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    source_ids = {source["content_id"] for source in sources_event["sources"]}
     assert source_ids == {vector_content_id, keyword_content_id}
-    assert "Vector-only safety context" in result["answer"]
-    assert "消防配置包括烟感" in result["answer"]
+    
+    content_text = "".join(e.get("text", "") for e in events if e.get("type") == "content")
+    assert "This answer is based on approved sources." in content_text
+    
+    contexts = dashscope.chat_requests[0]["contexts"]
+    assert any("Vector-only safety context" in c["text"] for c in contexts)
+    assert any("消防配置包括烟感" in c["text"] for c in contexts)
 
 
 def test_hybrid_keyword_retrieval_respects_user_permissions(db_session) -> None:
@@ -262,19 +286,26 @@ def test_hybrid_keyword_retrieval_respects_user_permissions(db_session) -> None:
         milvus=milvus,
     )
 
-    result = answer_question(
+    dashscope = FakeDashScopeClient(embedding=[0.2, 0.2, 0.2])
+    generator = answer_question(
         db_session,
         user=general_user,
         question="消防配置话术",
-        dashscope_client=FakeDashScopeClient(embedding=[0.2, 0.2, 0.2]),
+        dashscope_client=dashscope,
         milvus_client=milvus,
         settings=Settings(rag_similarity_threshold=0.7),
     )
+    events = consume_stream(generator)
 
-    assert result["hit"] is True
-    assert [source["content_id"] for source in result["sources"]] == [general_content_id]
-    assert "通用员工可见的消防配置说明" in result["answer"]
-    assert "全量权限专属消防配置报价底线" not in result["answer"]
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert [source["content_id"] for source in sources_event["sources"]] == [general_content_id]
+    
+    content_text = "".join(e.get("text", "") for e in events if e.get("type") == "content")
+    assert "This answer is based on approved sources." in content_text
+    
+    contexts = dashscope.chat_requests[0]["contexts"]
+    assert any("通用员工可见的消防配置说明" in c["text"] for c in contexts)
+    assert not any("全量权限专属消防配置报价底线" in c["text"] for c in contexts)
 
 
 @pytest.mark.parametrize("question", ["电池能用多少次？", "这块电池能循环多少次？"])
@@ -305,33 +336,36 @@ def test_short_cycle_life_question_expands_only_embedding_text(db_session, quest
     ]
     dashscope = FakeDashScopeClient(chat_answer="6000-8000 次", embedding=[1.0, 0.0, 0.0])
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=full_user,
         question=question,
         dashscope_client=dashscope,
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
-    assert result["hit"] is True
+    assert any(e.get("type") == "sources" for e in events)
     assert dashscope.embedding_requests == [f"{question} 电池循环寿命 充放电循环次数"]
-    assert dashscope.chat_requests == []
+    assert dashscope.chat_requests == [{"question": question, "contexts": dashscope.chat_requests[0]["contexts"], "model_name": None, "timeout_seconds": None, "stream": True}] if dashscope.chat_requests else False
 
 
 def test_short_cycle_life_miss_records_original_question(db_session) -> None:
     full_user = make_user(db_session, username="cycle-miss", account_type="full_user", content_level="full")
     dashscope = FakeDashScopeClient(embedding=[1.0, 0.0, 0.0])
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=full_user,
         question="电池能用多少次？",
         dashscope_client=dashscope,
         milvus_client=FakeMilvusClient(search_results=[]),
     )
+    events = consume_stream(generator)
 
     missed = db_session.scalars(select(MissedQuestion)).one()
-    assert result["hit"] is False
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert sources_event["sources"] == []
     assert dashscope.embedding_requests == ["电池能用多少次？ 电池循环寿命 充放电循环次数"]
     assert missed.question == "电池能用多少次？"
 
@@ -494,20 +528,23 @@ def test_rag_merges_same_content_chunks_into_one_context_and_source(db_session) 
     ]
     dashscope = FakeDashScopeClient(chat_answer="Merged answer", embedding=[0.2, 0.2, 0.2])
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=user,
         question="What is the approved source?",
         dashscope_client=dashscope,
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
-    assert result["hit"] is True
-    assert len(result["sources"]) == 1
-    assert dashscope.chat_requests == []
-    assert "First approved section." in result["answer"]
-    assert "Second approved section." in result["answer"]
-    assert result["sources"][0]["chunk_id"] == first_chunk.id
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert len(sources_event["sources"]) == 1
+    assert dashscope.chat_requests[0]["question"] == "What is the approved source?" if dashscope.chat_requests else False
+    
+    contexts = dashscope.chat_requests[0]["contexts"]
+    assert "First approved section." in contexts[0]["text"]
+    assert "Second approved section." in contexts[0]["text"]
+    assert sources_event["sources"][0]["chunk_id"] == first_chunk.id
 
 
 def test_rag_low_score_records_missed_question(db_session) -> None:
@@ -522,16 +559,23 @@ def test_rag_low_score_records_missed_question(db_session) -> None:
         ]
     )
 
-    result = answer_question(
+    generator = answer_question(
         db_session,
         user=user,
         question="Unanswerable question",
         dashscope_client=FakeDashScopeClient(embedding=[0.2, 0.2, 0.2]),
         milvus_client=milvus,
     )
+    events = consume_stream(generator)
 
     missed = db_session.scalars(select(MissedQuestion)).one()
-    assert result == {"hit": False, "answer": MISSED_MESSAGE, "sources": []}
+    
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert sources_event["sources"] == []
+    
+    content_event = next(e for e in events if e.get("type") == "content")
+    assert content_event["text"] == MISSED_MESSAGE
+    
     assert missed.question == "Unanswerable question"
     assert missed.user_id == user.id
     assert missed.account_type == "general_user"
@@ -595,14 +639,25 @@ def test_rag_api_covers_success_unauthorized_permission_filter_and_provider_erro
     unauthorized = client.post("/api/app/rag/ask", json={"question": "api question"})
 
     assert success.status_code == 200
-    assert success.json()["hit"] is True
-    assert success.json()["sources"][0]["content_id"] == general_content_id
-    assert dashscope.chat_requests == []
-    assert "API hidden full text" not in success.json()["answer"]
+    events = consume_stream(success.iter_lines())
+    
+    sources_event = next(e for e in events if e.get("type") == "sources")
+    assert sources_event["sources"][0]["content_id"] == general_content_id
+    
+    assert dashscope.chat_requests[0]["question"] == "api question" if dashscope.chat_requests else False
+    content_text = "".join(e.get("text", "") for e in events if e.get("type") == "content")
+    assert "API answer" in content_text
+    
+    contexts = dashscope.chat_requests[0]["contexts"]
+    assert not any("API hidden full text" in c["text"] for c in contexts)
+    
     assert unauthorized.status_code == 401
 
     app.dependency_overrides[get_dashscope_client] = lambda: FakeDashScopeClient(
         embedding_error=ProviderTimeoutError("embedding timed out"),
     )
     unavailable = client.post("/api/app/rag/ask", json={"question": "api question"}, headers=general_user_headers)
-    assert unavailable.status_code == 503
+    assert unavailable.status_code == 200
+    unavailable_events = consume_stream(unavailable.iter_lines())
+    error_event = next(e for e in unavailable_events if e.get("type") == "error")
+    assert "智能问答暂不可用" in error_event["message"]

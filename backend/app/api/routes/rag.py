@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_dashscope_client, get_milvus_client
@@ -20,11 +21,12 @@ def app_ask_rag(
     db: Session = Depends(get_db),
     dashscope_client=Depends(get_dashscope_client),
     milvus_client=Depends(get_milvus_client),
-) -> dict[str, Any]:
-    return answer_question(
+) -> StreamingResponse:
+    generator = answer_question(
         db,
         user=current_user,
         question=payload.question,
         dashscope_client=dashscope_client,
         milvus_client=milvus_client,
     )
+    return StreamingResponse(generator, media_type="text/event-stream")

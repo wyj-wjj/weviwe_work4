@@ -336,7 +336,7 @@ def answer_question(
         return
 
     sources = [context["source"] for context in contexts]
-    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, default=str)}\n\n"
 
     try:
         for chunk in dashscope_client.generate_answer_stream(
