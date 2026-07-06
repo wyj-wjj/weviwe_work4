@@ -2,17 +2,17 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { askRag, type RagAnswerResponse } from '../../api/rag'
+import { askRagStream, type RagSource } from '../../api/rag'
 import AppState from '../../components/AppState.vue'
 import CopyButton from '../../components/CopyButton.vue'
 import EmployeeLayout from '../../components/EmployeeLayout.vue'
 import { contentTypeLabel, formatDateTime, scopeLabel, sourceDetailPath, updateLevelLabel } from '../../utils/format'
 
 const route = useRoute()
-const answer = ref<RagAnswerResponse | null>(null)
-const state = ref<'loading' | 'ready' | 'empty' | 'ai-unavailable' | 'service'>('loading')
+const answerText = ref('')
+const sources = ref<RagSource[]>([])
+const state = ref<'loading' | 'generating' | 'ready' | 'empty' | 'ai-unavailable' | 'service'>('loading')
 const aiStateMessage = ref('')
-let requestSequence = 0
 let activeController: AbortController | null = null
 
 const question = computed(() => {
@@ -23,11 +23,10 @@ const question = computed(() => {
 watch(
   [question, () => route.query.request],
   async ([currentQuestion]) => {
-    requestSequence += 1
-    const sequence = requestSequence
     activeController?.abort()
     activeController = null
-    answer.value = null
+    answerText.value = ''
+    sources.value = []
 
     const normalizedQuestion = currentQuestion.trim()
     if (!normalizedQuestion) {
@@ -38,37 +37,33 @@ watch(
     const controller = new AbortController()
     activeController = controller
     state.value = 'loading'
-    aiStateMessage.value = '正在检索标准话术并生成简明回答，通常 10 秒内返回，请稍候。'
-    try {
-      const result = await askRag(normalizedQuestion, controller.signal)
-      if (sequence !== requestSequence || controller.signal.aborted) return
-      answer.value = result
-      state.value = 'ready'
-    } catch (error) {
-      if (sequence !== requestSequence || controller.signal.aborted) return
-      const apiError = error as { code?: string; status?: number }
-      if (
-        apiError.code === 'ai_unavailable' ||
-        apiError.code === 'request_timeout' ||
-        apiError.status === 503
-      ) {
-        aiStateMessage.value = 'AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'
-        state.value = 'ai-unavailable'
-      } else {
-        aiStateMessage.value = '页面没有卡住，可能是网络连接短暂波动。请稍后重试。'
-        state.value = 'service'
-      }
-    } finally {
-      if (activeController === controller) {
-        activeController = null
-      }
-    }
+    aiStateMessage.value = '正在检索标准话术...'
+
+    await askRagStream(
+      normalizedQuestion,
+      {
+        onSources: (s) => {
+          sources.value = s
+          state.value = 'generating'
+        },
+        onContent: (text) => {
+          answerText.value += text
+        },
+        onError: (msg) => {
+          aiStateMessage.value = msg
+          state.value = 'service'
+        },
+        onDone: () => {
+          state.value = 'ready'
+        }
+      },
+      controller.signal
+    )
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  requestSequence += 1
   activeController?.abort()
   activeController = null
 })
@@ -85,17 +80,17 @@ onBeforeUnmount(() => {
       <AppState v-else-if="state === 'ai-unavailable'" state="ai-unavailable" :message="aiStateMessage" />
       <AppState v-else-if="state === 'service'" state="service" :message="aiStateMessage" />
 
-      <article v-else-if="answer" class="ai-answer">
+      <article v-else-if="state === 'generating' || state === 'ready'" class="ai-answer">
         <section>
           <h3>回答</h3>
-          <p>{{ answer.answer }}</p>
-          <CopyButton label="复制回答" :text="answer.answer" />
+          <p class="answer-text">{{ answerText }}<span v-if="state === 'generating'" class="cursor"></span></p>
+          <CopyButton v-if="state === 'ready'" label="复制回答" :text="answerText" />
         </section>
 
-        <section v-if="answer.hit && answer.sources.length > 0">
+        <section v-if="sources.length > 0">
           <h3>来源</h3>
           <div class="source-list">
-            <article v-for="source in answer.sources" :key="source.chunk_id" class="source-card">
+            <article v-for="source in sources" :key="source.chunk_id" class="source-card">
               <strong>{{ source.title }}</strong>
               <span>{{ contentTypeLabel(source.content_type) }}</span>
               <span>更新时间：{{ formatDateTime(source.updated_at) }}</span>
@@ -135,9 +130,25 @@ onBeforeUnmount(() => {
   margin: 0 0 8px;
 }
 
-.ai-answer p {
+.answer-text {
   line-height: 1.7;
   margin: 0 0 12px;
+  white-space: pre-wrap;
+}
+
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background-color: #52606d;
+  vertical-align: middle;
+  margin-left: 4px;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .source-list {
