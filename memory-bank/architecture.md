@@ -20,6 +20,7 @@
 - RAG 回答先做问题 embedding，再按权限召回 Milvus 候选，随后从 MySQL 回查并再次过滤已发布、当前版本、active chunk 和用户权限。
 - 2026-06-22 起 RAG 检索采用混合召回：每次问答同时执行 Milvus 向量召回和 MySQL 关键词召回，关键词路径检索当前版本标题、分类和 chunk 正文，并在 SQL 层先过滤已发布、active chunk、当前版本和当前用户权限；两路候选按分数融合去重后，再进入统一 MySQL 回查和来源摘要流程。
 - 2026-06-22 起员工端 RAG 默认采用 10 秒内响应优先的极速回答策略：命中授权来源后，后端直接基于 MySQL 回查后的当前 chunk 生成简明来源摘要，不再等待生成模型长回答；响应中的 `usage.mode=fast_extractive` 标识该模式。生成模型集成仍保留，但不作为员工端当前默认回答路径。
+- 2026-07-06 极速回答提取逻辑修正：修复了 `fast_extractive` 模式下“由于合并前序相邻上下文导致总是返回文档开头”的问题。`build_fast_answer` 现在优先基于实际命中的核心片段 (`hit_texts`) 进行提取，同时在精简阶段额外过滤掉“摘要：”前缀，确保返回内容精确聚焦于用户提问相关区域。
 - 未命中包括无候选、低于相似度阈值、MySQL 回查后无有效来源；未命中会返回固定提示并写入 `missed_questions`。
 - MVP 不做对话持久化，不创建 `conversation_threads`、`conversation_messages`、`rag_answer_sources`。
 - MVP 不持久化员工测验答题记录、分数、排行或统计。

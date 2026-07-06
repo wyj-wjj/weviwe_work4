@@ -37,7 +37,7 @@ watch(
     const controller = new AbortController()
     activeController = controller
     state.value = 'loading'
-    aiStateMessage.value = '正在检索标准话术...'
+    aiStateMessage.value = '正在检索标准话术并生成回答，请稍候。'
 
     await askRagStream(
       normalizedQuestion,
