@@ -107,6 +107,30 @@ class FakeDashScopeClient:
             usage={"prompt_tokens": token_estimate, "completion_tokens": max(1, len(self.chat_answer) // 4)},
         )
 
+    def generate_answer_stream(
+        self,
+        *,
+        question: str,
+        contexts: list[dict[str, Any]],
+        model_name: str | None = None,
+        timeout_seconds: float | None = None,
+    ):
+        self.chat_requests.append(
+            {
+                "question": question,
+                "contexts": contexts,
+                "model_name": model_name,
+                "timeout_seconds": timeout_seconds,
+                "stream": True,
+            }
+        )
+        if self.chat_error is not None:
+            raise self.chat_error
+        
+        words = self.chat_answer.split(" ")
+        for i, word in enumerate(words):
+            yield word + (" " if i < len(words) - 1 else "")
+
     def ocr_image(self, *, image_bytes: bytes, mime_type: str) -> str:
         self.ocr_requests.append({"size": len(image_bytes), "mime_type": mime_type})
         if self.ocr_error is not None:
@@ -381,6 +405,78 @@ class DashScopeHttpClient:
             else {}
         )
         return ChatGeneration(answer_text=content.strip(), usage=usage)
+
+    def generate_answer_stream(
+        self,
+        *,
+        question: str,
+        contexts: list[dict[str, Any]],
+        model_name: str | None = None,
+        timeout_seconds: float | None = None,
+    ):
+        source_blocks = []
+        for index, context in enumerate(contexts, start=1):
+            source = context.get("source") if isinstance(context.get("source"), dict) else {}
+            title = source.get("title") or f"来源 {index}"
+            text = context.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            source_blocks.append(f"[来源 {index}] {title}\n{text.strip()}")
+        if not source_blocks:
+            raise ProviderResponseError("No authorized context was provided for answer generation.")
+
+        payload = {
+            "model": model_name or self.settings.dashscope_chat_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是企业官方话术助手。只能依据提供的已授权来源回答，"
+                        "不得补充来源中没有的业务结论，不得推测，不得泄露未提供的内容。"
+                        "先直接回答用户问题，并覆盖来源中与问题直接相关的关键数字、条件和限制。"
+                        "不要机械罗列与问题无关的来源内容。"
+                        "如果来源不足以回答，应明确说明现有来源不足。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"用户问题：{question}\n\n"
+                        "以下内容均已通过当前账号权限和有效状态校验：\n\n"
+                        + "\n\n".join(source_blocks)
+                    ),
+                },
+            ],
+            "stream": True,
+            "stream_options": {"include_usage": True}
+        }
+        
+        url = f"{self.settings.dashscope_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.settings.dashscope_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream"
+        }
+        timeout = timeout_seconds or self.settings.dashscope_http_timeout_seconds
+        
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            with client.stream("POST", url, headers=headers, json=payload) as response:
+                if response.status_code != 200:
+                    raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
+                for line in response.iter_lines():
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(data_str)
+                            choices = data.get("choices", [])
+                            if choices and "delta" in choices[0]:
+                                content = choices[0]["delta"].get("content")
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            continue
 
     def ocr_image(self, *, image_bytes: bytes, mime_type: str) -> str:
         image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
