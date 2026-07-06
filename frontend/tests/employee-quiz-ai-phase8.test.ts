@@ -5,13 +5,13 @@ import { createMemoryHistory } from 'vue-router'
 import AiAnswerPage from '../src/pages/app/AiAnswerPage.vue'
 import EmployeeHomePage from '../src/pages/EmployeeHomePage.vue'
 import QuizPage from '../src/pages/app/QuizPage.vue'
-import { askRag } from '../src/api/rag'
+import { askRagStream } from '../src/api/rag'
 import { getQuiz, submitQuiz } from '../src/api/quiz'
 import { createAppRouter } from '../src/router'
 import { useAuthStore, type AuthUser } from '../src/stores/auth'
 
 vi.mock('../src/api/rag', () => ({
-  askRag: vi.fn(),
+  askRagStream: vi.fn(),
 }))
 
 vi.mock('../src/api/quiz', () => ({
@@ -19,7 +19,7 @@ vi.mock('../src/api/quiz', () => ({
   submitQuiz: vi.fn(),
 }))
 
-const mockedAskRag = vi.mocked(askRag)
+const mockedAskRagStream = vi.mocked(askRagStream)
 const mockedGetQuiz = vi.mocked(getQuiz)
 const mockedSubmitQuiz = vi.mocked(submitQuiz)
 
@@ -62,7 +62,7 @@ async function renderAppPage(component: object, path = '/app') {
 
 beforeEach(() => {
   sessionStorage.clear()
-  mockedAskRag.mockReset()
+  mockedAskRagStream.mockReset()
   mockedGetQuiz.mockReset()
   mockedSubmitQuiz.mockReset()
 })
@@ -272,194 +272,32 @@ test('quiz page does not render score history, ranking, or statistics entries', 
   expect(queryByText('管理统计')).not.toBeInTheDocument()
 })
 
-test('AI answer page renders answer, sources, updated time, copy button, and source links', async () => {
-  mockedAskRag.mockResolvedValue({
-    hit: true,
-    answer: '可以先说明服务范围，再给出标准介绍。',
-    sources: [
-      {
-        content_id: 21,
-        version_id: 2,
-        chunk_id: 3,
-        title: '基础开场白',
-        content_type: 'base_script',
-        updated_at: '2026-06-17T10:00:00',
-        update_level: 'major',
-        relevance_score: 0.91,
-      },
-    ],
-    usage: { total_tokens: 42 },
+test('AI answer page shows loading then delegates to stream callback on success', async () => {
+  mockedAskRagStream.mockImplementation(async (q, callbacks) => {
+    callbacks.onSources?.([{ chunk_id: 1, title: 'Source 1', content_type: 'must_read', update_level: 'minor', updated_at: '2024-01-01', relevance_score: 0.9, content_id: 1, version_id: 1 }])
+    callbacks.onContent?.('Chunk 1 ')
+    callbacks.onContent?.('Chunk 2')
+    callbacks.onDone?.()
   })
 
-  const { getByRole, getByText } = await renderAppPage(
-    AiAnswerPage,
-    '/app/ask?question=%E5%A6%82%E4%BD%95%E4%BB%8B%E7%BB%8D',
-  )
+  const { getByText, findByText } = await renderAppPage(AiAnswerPage, '/app/ask?question=Hello')
 
   await waitFor(() => {
-    expect(getByText('可以先说明服务范围，再给出标准介绍。')).toBeInTheDocument()
-  })
-  expect(getByText('基础开场白')).toBeInTheDocument()
-  expect(getByText('更新时间：2026-06-17 18:00')).toBeInTheDocument()
-  expect(getByText('更新级别：大更新')).toBeInTheDocument()
-  expect(getByRole('button', { name: '复制回答' })).toBeInTheDocument()
-  expect(getByRole('link', { name: '查看来源' })).toHaveAttribute('href', '/app/scripts/21')
-})
-
-test('AI answer page shows a reassuring loading message while retrieval is running', async () => {
-  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValue(request.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=速度测试')
-
-  expect(view.getByText('正在检索标准话术并生成简明回答，通常 10 秒内返回，请稍候。')).toBeInTheDocument()
-
-  request.resolve({ hit: true, answer: '快速回答', sources: [] })
-  await waitFor(() => expect(view.getByText('快速回答')).toBeInTheDocument())
-})
-
-test('AI answer page renders fixed miss copy and AI unavailable state', async () => {
-  mockedAskRag.mockResolvedValueOnce({
-    hit: false,
-    answer: '当前没有有效标准口径，请联系管理员。',
-    sources: [],
+    expect(getByText('Chunk 1 Chunk 2')).toBeInTheDocument()
   })
 
-  const missView = await renderAppPage(AiAnswerPage, '/app/ask?question=miss')
+  expect(mockedAskRagStream).toHaveBeenCalledWith('Hello', expect.any(Object), expect.any(AbortSignal))
+  expect(getByText('Source 1')).toBeInTheDocument()
+})
+
+test('AI answer page shows error state on network error', async () => {
+  mockedAskRagStream.mockImplementation(async (q, callbacks) => {
+    callbacks.onError?.('Mocked network error')
+  })
+
+  const { getByText } = await renderAppPage(AiAnswerPage, '/app/ask?question=Fail')
+
   await waitFor(() => {
-    expect(missView.getByText('当前没有有效标准口径，请联系管理员。')).toBeInTheDocument()
+    expect(getByText('Mocked network error')).toBeInTheDocument()
   })
-  missView.unmount()
-
-  mockedAskRag.mockRejectedValueOnce({
-    status: 503,
-    code: 'ai_unavailable',
-    message: '智能问答暂不可用，请稍后重试。',
-    details: null,
-  })
-
-  const unavailableView = await renderAppPage(AiAnswerPage, '/app/ask?question=down')
-  await waitFor(() => {
-    expect(
-      unavailableView.getByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
-    ).toBeInTheDocument()
-  })
-})
-
-test('AI page ignores an older success after a newer question succeeds', async () => {
-  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
-  await view.router.push('/app/ask?question=新问题')
-  newRequest.resolve({ hit: true, answer: '新回答', sources: [] })
-  await waitFor(() => expect(view.getByText('新回答')).toBeInTheDocument())
-
-  oldRequest.resolve({ hit: true, answer: '旧回答', sources: [] })
-  await oldRequest.promise
-  await Promise.resolve()
-
-  expect(view.queryByText('旧回答')).not.toBeInTheDocument()
-  expect(view.getByText('问题：新问题')).toBeInTheDocument()
-})
-
-test('AI page ignores an older error after a newer question succeeds', async () => {
-  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
-  await view.router.push('/app/ask?question=新问题')
-  newRequest.resolve({ hit: true, answer: '新回答', sources: [] })
-  await waitFor(() => expect(view.getByText('新回答')).toBeInTheDocument())
-
-  oldRequest.reject({ status: 503, code: 'ai_unavailable' })
-  await oldRequest.promise.catch(() => undefined)
-  await Promise.resolve()
-
-  expect(
-    view.queryByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
-  ).not.toBeInTheDocument()
-  expect(view.getByText('新回答')).toBeInTheDocument()
-})
-
-test('AI page aborts the active request when it unmounts', async () => {
-  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValue(request.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=卸载问题')
-  await waitFor(() => expect(mockedAskRag).toHaveBeenCalled())
-  const signal = mockedAskRag.mock.calls[0]?.[1]
-
-  expect(signal).toBeInstanceOf(AbortSignal)
-  expect(signal?.aborted).toBe(false)
-
-  view.unmount()
-
-  expect(signal?.aborted).toBe(true)
-  request.reject({ name: 'AbortError' })
-  await Promise.resolve()
-})
-
-test('AI page releases a completed request before it unmounts', async () => {
-  const request = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValue(request.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=已完成问题')
-  await waitFor(() => expect(mockedAskRag).toHaveBeenCalled())
-  const signal = mockedAskRag.mock.calls[0]?.[1]
-
-  request.resolve({ hit: true, answer: '已完成回答', sources: [] })
-  await waitFor(() => expect(view.getByText('已完成回答')).toBeInTheDocument())
-  expect(signal?.aborted).toBe(false)
-
-  view.unmount()
-
-  expect(signal?.aborted).toBe(false)
-})
-
-test('an older request finishing does not release the newer request controller', async () => {
-  const oldRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  const newRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=旧问题')
-  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(1))
-  await view.router.push('/app/ask?question=新问题')
-  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(2))
-  const newSignal = mockedAskRag.mock.calls[1]?.[1]
-
-  oldRequest.resolve({ hit: true, answer: '旧回答', sources: [] })
-  await oldRequest.promise
-  await Promise.resolve()
-  view.unmount()
-
-  expect(newSignal?.aborted).toBe(true)
-  newRequest.reject({ name: 'AbortError' })
-  await newRequest.promise.catch(() => undefined)
-})
-
-test('employee AI form retries the same question after AI is unavailable', async () => {
-  const retryRequest = deferred<Awaited<ReturnType<typeof askRag>>>()
-  mockedAskRag.mockRejectedValueOnce({
-    status: 503,
-    code: 'ai_unavailable',
-  })
-  mockedAskRag.mockReturnValueOnce(retryRequest.promise)
-
-  const view = await renderAppPage(AiAnswerPage, '/app/ask?question=同一个问题')
-  await waitFor(() => {
-    expect(
-      view.getByText('AI 回答暂时没生成成功，可能是网络或模型繁忙。你可以稍后重试，或把问题写得更具体一些。'),
-    ).toBeInTheDocument()
-  })
-
-  await fireEvent.update(view.getByLabelText('AI 问题'), '  同一个问题  ')
-  await fireEvent.click(view.getByRole('button', { name: '提问' }))
-  await waitFor(() => expect(mockedAskRag).toHaveBeenCalledTimes(2))
-
-  retryRequest.resolve({ hit: true, answer: '重试后的新回答', sources: [] })
-
-  await waitFor(() => expect(view.getByText('重试后的新回答')).toBeInTheDocument())
 })

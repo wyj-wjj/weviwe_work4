@@ -267,3 +267,17 @@
 - 不要为绕过本地凭据问题把真实手测改回 SQLite 或假客户端。
 - 不要复用旧 3 维 Milvus collection；真实 `text-embedding-v4` 使用独立 1024 维 collection。
 - 真实服务检查结果只能记录模型名、维度、collection 和行为，不记录密码、API Key、JWT 或完整 token。
+
+## 2026-07-06 增量修复
+- **RAG 流式输出（SSE）全面替换**
+  - **问题**：旧版 RAG 需要等大模型完全生成后才返回，导致首字延迟（TTFT）过长，用户体验卡顿。
+  - **解决**：废弃了前端等待全量返回的模式，重构为端到端流式架构。
+    - 后端：在 `dashscope.py` 实现了基于 `httpx.Client.stream` 的真正流式请求；在 `rag_answer_service.py` 实现了自定义的 SSE 格式（`sources`, `content`, `done`, `error`）；在 FastAPI 路由中使用 `StreamingResponse` 返回生成器。
+    - 前端：废弃 axios，采用原生 `fetch` 与 `ReadableStream` 编写轻量级 SSE 解析器；在员工端问答页面实现了逐字渲染的打字机光标特效。
+  - **状态**：✅ 已完成，全栈流式链路跑通，前后端测试套件（`test_rag_phase6.py` 和 `employee-quiz-ai-phase8.test.ts`）全部通过。
+
+- **RAG 极速模式（fast_extractive）回答失焦修复**
+  - **问题**：AI 问答检索命中文本后，返回的却是文章开头或摘要内容。
+  - **原因**：合并同源上下文时，包含了前序块并优先排列；且精简截断逻辑固定取前 6 行且未过滤“摘要：”前缀。
+  - **解决**：在 `rag_answer_service.py` 中精准收集实际命中的核心块 (`hit_texts`) 并在展示阶段优先基于此核心块生成摘要，同时补充过滤“摘要：”元数据前缀。
+  - **状态**：✅ 已完成，后端测试通过（`test_rag_phase6.py`）。
