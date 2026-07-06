@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import { useAuthStore } from '../stores/auth'
 
 export interface RagSource {
   content_id: number
@@ -26,7 +27,9 @@ export async function askRagStream(
   callbacks: RagStreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+  const auth = useAuthStore();
+  const token = auth.token;
+  
   try {
     const response = await fetch('/api/app/rag/ask', {
       method: 'POST',
@@ -39,6 +42,11 @@ export async function askRagStream(
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        auth.clearSession();
+        window.location.href = '/login';
+        return;
+      }
       const errorData = await response.json().catch(() => ({}));
       callbacks.onError?.(errorData.message || '服务异常，请稍后重试');
       return;
