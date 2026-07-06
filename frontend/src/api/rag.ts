@@ -14,21 +14,74 @@ export interface RagSource {
   relevance_score: number
 }
 
-export interface RagAnswerResponse {
-  hit: boolean
-  answer: string
-  sources: RagSource[]
-  usage?: Record<string, unknown>
+export interface RagStreamCallbacks {
+  onSources?: (sources: RagSource[]) => void;
+  onContent?: (text: string) => void;
+  onError?: (error: string) => void;
+  onDone?: () => void;
 }
 
-export async function askRag(
+export async function askRagStream(
   question: string,
-  signal?: AbortSignal,
-): Promise<RagAnswerResponse> {
-  const response = await apiClient.post<RagAnswerResponse>(
-    '/app/rag/ask',
-    { question },
-    { signal, timeout: 10000 },
-  )
-  return response.data
+  callbacks: RagStreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+  try {
+    const response = await fetch('/api/app/rag/ask', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ question }),
+      signal
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      callbacks.onError?.(errorData.message || '服务异常，请稍后重试');
+      return;
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      callbacks.onError?.('当前环境不支持流式读取');
+      return;
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'sources') {
+              callbacks.onSources?.(data.sources);
+            } else if (data.type === 'content') {
+              callbacks.onContent?.(data.text);
+            } else if (data.type === 'error') {
+              callbacks.onError?.(data.message);
+            } else if (data.type === 'done') {
+              callbacks.onDone?.();
+            }
+          } catch (e) {
+            console.error('SSE JSON parse error', e);
+          }
+        }
+      }
+    }
+  } catch (error: any) {
+    if (error.name === 'AbortError') return;
+    callbacks.onError?.('网络异常，请重试');
+  }
 }
