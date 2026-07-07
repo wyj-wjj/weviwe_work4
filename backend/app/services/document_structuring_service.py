@@ -34,7 +34,7 @@ IMPORT_CONTENT_FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "required_top_level_fields": ["title", "summary", "body"],
         "required_payload_fields": [],
         "recommended_payload_fields": ["points"],
-        "split_allowed": False,
+        "split_allowed": True,
     },
     "standard_script": {
         "label": "标准化话术",
@@ -94,7 +94,7 @@ def structure_import_result(
             raw_text=raw_text,
             content_type=content_type,
             single_draft=single_draft,
-        )[:20]
+        )
     if not isinstance(data, dict):
         single_draft = fallback_import_draft(content_type=content_type, file_name=file_name, raw_text=raw_text)
         single_draft.warnings.append("AI 结构化失败，已使用本地解析文本生成保守草稿，请人工核对字段。")
@@ -102,7 +102,7 @@ def structure_import_result(
             raw_text=raw_text,
             content_type=content_type,
             single_draft=single_draft,
-        )[:20]
+        )
 
     single_draft = normalize_import_draft(
         data,
@@ -121,7 +121,7 @@ def structure_import_result(
             content_type=content_type,
             single_draft=single_draft,
         )
-    return single_draft, split_suggestions[:20]
+    return single_draft, split_suggestions
 
 
 def fallback_import_draft(
@@ -193,7 +193,7 @@ def normalize_split_suggestions(
     if not isinstance(value, list):
         return []
     suggestions: list[ImportSplitSuggestion] = []
-    for index, item in enumerate(value[:20], start=1):
+    for index, item in enumerate(value, start=1):
         if not isinstance(item, dict):
             continue
         suggested_type = item.get("suggested_content_type")
@@ -239,7 +239,7 @@ def suggest_split_suggestions(
     if len(meaningful_sections) < 2:
         return []
     suggestions: list[ImportSplitSuggestion] = []
-    for index, section in enumerate(meaningful_sections[:20], start=1):
+    for index, section in enumerate(meaningful_sections, start=1):
         title = section.splitlines()[0].strip()[:80] if section.splitlines() else f"{single_draft.title} {index}"
         if len(section) < 300 and suggestions:
             previous = suggestions[-1]
@@ -405,7 +405,7 @@ def _failed_structure_result(
             raw_text=raw_text,
             content_type=content_type,
             single_draft=single_draft,
-        )[:20],
+        ),
         status="failed",
         warnings=[STRUCTURE_FALLBACK_WARNING],
         error_code=provider_error.code,
@@ -460,7 +460,7 @@ def structure_import_result(
         )
     return StructuringResult(
         single_draft=single_draft,
-        split_suggestions=split_suggestions[:20],
+        split_suggestions=split_suggestions,
         status="completed",
         warnings=list(single_draft.warnings),
     )
