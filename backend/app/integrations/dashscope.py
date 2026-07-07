@@ -198,58 +198,41 @@ def _content_import_schema_hint(content_type: str) -> dict[str, Any]:
 
 def _content_import_contract_prompt(content_type: str) -> str:
     shared = (
-        "你正在把 Word/PDF 解析文本整理成后台内容草稿。\n"
-        "只能基于输入文本整理字段，不得使用外部知识或自行补充业务口径。\n"
-        "只允许基于原文整理、概括、分段和抽取字段，不得补充原文没有的业务事实。\n"
-        "权限级别、可见范围、部门、生效时间和失效时间由管理员在后台选择，你不能生成或推断这些字段。\n"
-        "必须返回合法 JSON，不要返回 Markdown，不要返回解释文本。\n"
+        "只允许基于原文整理、概括、分段和抽取字段，绝对禁止脱离原文捏造任何业务事实、指标或外部信息。\n"
+        "如果输入文本不足以提取某字段，请保留为空。\n\n"
     )
     if content_type == "must_read":
-        return (
-            shared
-            + "\n当前内容类型：最新必读 must_read。\n"
-            "必须输出字段：\n"
-            "- title: 适合作为更新标题的短标题。\n"
-            "- category: 从原文归纳的分类；不确定时返回空字符串。\n"
-            "- summary: 120 个中文字符以内，概括本次更新影响。\n"
-            "- body: 保留换行的正文。\n"
-            "- structured_payload.update_body: 保留格式的更新正文。\n"
-            "- structured_payload.adjustment_points: 调整要点数组；没有明确要点时返回空数组。\n"
-            "不要返回 split_suggestions，最新必读不自动拆分。\n"
+        return shared + (
+            "这是一份“最新必读”类型的话术文档，侧重时效性强、需全员紧急知晓的通知、政策或业务更新。\n"
+            "提取以下字段：\n"
+            "- title: 文档核心标题\n"
+            "- summary: 120个中文字符以内的核心通知摘要。\n"
+            "- body: 必须100%保留输入文本的原始正文内容，仅做换行和排版格式上的整理，绝对禁止对正文进行任何删减、缩写或概括提炼。\n"
+            "- points: 提取3-5个最关键的必须记住的要点（字符串数组）。\n"
+            "不要返回 split_suggestions，最新必读不自动拆分。"
         )
-    if content_type == "base_script":
-        return (
-            shared
-            + "\n当前内容类型：核心基础话术 base_script。\n"
-            "必须输出字段：\n"
-            "- title: 适合作为基础话术的短标题。\n"
-            "- category: 从原文归纳的分类；不确定时返回空字符串。\n"
-            "- summary: 120 个中文字符以内，概括话术核心价值。\n"
-            "- body: 保留换行的完整基础话术正文。\n"
-            "- structured_payload.points: 核心要点数组；没有明确要点时返回空数组。\n"
-            "不要返回 split_suggestions，核心基础话术不自动拆分。\n"
+    elif content_type == "base_script":
+        return shared + (
+            "这是一份“核心基础话术”文档，侧重公司级、通用级的基础业务知识和底层逻辑解释。\n"
+            "提取以下字段：\n"
+            "- title: 文档核心标题\n"
+            "- summary: 120个中文字符以内的高度概括摘要。\n"
+            "- body: 必须100%保留输入文本的原始正文内容，仅做换行和排版格式上的整理，绝对禁止对正文进行任何删减、缩写或概括提炼。\n"
+            "- points: 提取3-5个最关键的底层逻辑要点（字符串数组）。\n"
+            "- split_suggestions: 将正文按逻辑独立性拆分为多个片段（如：各个独立的问答对、各独立的业务章节）。每个片段包含 title、summary、body 和 points。每个片段的 body 也必须100%保留对应原文，严禁概括。"
         )
-    return (
-        shared
-        + "\n当前内容类型：标准化话术 standard_script。\n"
-        "单条草稿必须输出字段：\n"
-        "- title: 文档级标题。\n"
-        "- category: 从原文归纳的分类；不确定时返回空字符串。\n"
-        "- summary: 120 个中文字符以内，概括文档内容。\n"
-        "- body: 整理后的正文。\n"
-        "- structured_payload.scene: 如果全文只有一个明确场景，则填写；否则返回空字符串。\n"
-        "- structured_payload.recommended_speech: 如果全文只有一条明确推荐话术，则填写；否则返回空字符串。\n"
-        "- structured_payload.forbidden_speech: 原文明确禁止或不建议说法。\n"
-        "- structured_payload.notes: 注意事项。\n\n"
-        "拆分规则：\n"
-        "拆分标准化话术时，每个 split_suggestion 必须是一个可独立保存的话术条目。\n"
-        "每个 split_suggestion 必须有 title、summary、body、structured_payload.scene、structured_payload.recommended_speech。\n"
-        "如果某一段无法生成“场景”和“推荐说法”，不要把它作为可保存拆解候选。\n"
-        "forbidden_speech 和 notes 没有原文依据时可以返回空字符串，但不能编造。\n"
-        "章节标题属于其后内容，不能放在上一条候选正文末尾。\n"
-        "若文档是产品介绍、培训讲稿或知识文章，而不是多条标准话术，请返回 single_draft，并将 split_suggestions 置为空。\n"
-        "不要为了凑数量拆分。\n"
-    )
+    elif content_type == "standard_script":
+        return shared + (
+            "这是一份“标准化话术”文档，侧重具体的业务场景应对、客户沟通技巧和标准问答对。\n"
+            "提取以下字段：\n"
+            "- title: 文档核心标题\n"
+            "- summary: 120个中文字符以内的场景摘要。\n"
+            "- body: 必须100%保留输入文本的原始正文内容，仅做换行和排版格式上的整理，绝对禁止对正文进行任何删减、缩写或概括提炼。\n"
+            "- recommended_speech: 提炼出的最直接、可直接说给客户听的推荐原话（如果没有则为空）。\n"
+            "- scene: 该话术适用的具体业务场景。\n"
+            "- split_suggestions: 如果原文包含多个不同的场景或多个独立的问答对，请将其拆分为多个独立的片段。每个片段包含 title、summary、body、recommended_speech 和 scene。每个片段的 body 也必须100%保留对应原文，严禁概括。"
+        )
+    return shared
 
 
 class DashScopeHttpClient:
