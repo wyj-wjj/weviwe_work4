@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     dashscope_embedding_model: str = "text-embedding-v4"
     dashscope_ocr_model: str = "qwen-vl-ocr-2025-11-20"
     dashscope_vision_model: str = "qwen3.6-plus"
-    dashscope_http_timeout_seconds: float = 15.0
-    dashscope_import_timeout_seconds: float = 120.0
-    dashscope_ocr_timeout_seconds: float = 60.0
+    dashscope_http_timeout_seconds: float = 30.0
+    dashscope_import_timeout_seconds: float = 300.0
+    dashscope_ocr_timeout_seconds: float = 120.0
     dashscope_quiz_timeout_seconds: float = 90.0
     content_import_max_file_mb: int = 20
     content_import_max_pdf_pages: int = 80

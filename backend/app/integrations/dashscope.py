@@ -459,24 +459,29 @@ class DashScopeHttpClient:
         }
         timeout = timeout_seconds or self.settings.dashscope_http_timeout_seconds
         
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
-            with client.stream("POST", url, headers=headers, json=payload) as response:
-                if response.status_code != 200:
-                    raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
-                for line in response.iter_lines():
-                    if line.startswith("data:"):
-                        data_str = line[5:].strip()
-                        if not data_str or data_str == "[DONE]":
-                            continue
-                        try:
-                            data = json.loads(data_str)
-                            choices = data.get("choices", [])
-                            if choices and "delta" in choices[0]:
-                                content = choices[0]["delta"].get("content")
-                                if content:
-                                    yield content
-                        except json.JSONDecodeError:
-                            continue
+        try:
+            with httpx.Client(timeout=timeout, trust_env=False) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code != 200:
+                        raise ProviderResponseError(f"DashScope returned HTTP {response.status_code}.")
+                    for line in response.iter_lines():
+                        if line.startswith("data:"):
+                            data_str = line[5:].strip()
+                            if not data_str or data_str == "[DONE]":
+                                continue
+                            try:
+                                data = json.loads(data_str)
+                                choices = data.get("choices", [])
+                                if choices and "delta" in choices[0]:
+                                    content = choices[0]["delta"].get("content")
+                                    if content:
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            raise ProviderTimeoutError("DashScope streaming request timed out or could not connect.") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderResponseError("DashScope streaming request failed.") from exc
 
     def ocr_image(self, *, image_bytes: bytes, mime_type: str) -> str:
         image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
