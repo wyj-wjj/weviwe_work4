@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     content_import_max_pdf_pages: int = 80
     content_import_max_ocr_pages: int = 30
     content_import_default_parse_mode: str = "fast"
-    rag_similarity_threshold: float = 0.7
+    rag_similarity_threshold: float = 0.65
     rag_top_k: int = 5
     jwt_secret_key: str = "test-only-insecure-secret-with-32-plus-chars"
     use_fake_external_clients: bool = True

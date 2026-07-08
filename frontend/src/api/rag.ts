@@ -20,19 +20,24 @@ export interface RagStreamCallbacks {
   onContent?: (text: string) => void;
   onError?: (error: string) => void;
   onDone?: () => void;
+  onDebug?: (stage: string, data: any) => void;
 }
 
 export async function askRagStream(
   question: string,
   callbacks: RagStreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  debug = false,
 ): Promise<void> {
   const auth = useAuthStore();
   const token = auth.token;
-  
+
   try {
     const baseURL = import.meta.env.VITE_API_BASE_URL || '/api';
-    const response = await fetch(`${baseURL}/app/rag/ask`, {
+    const url = debug
+      ? `${baseURL}/app/rag/ask?debug=1`
+      : `${baseURL}/app/rag/ask`;
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -82,6 +87,8 @@ export async function askRagStream(
               callbacks.onError?.(data.message);
             } else if (data.type === 'done') {
               callbacks.onDone?.();
+            } else if (data.type === 'debug') {
+              callbacks.onDebug?.(data.stage, data);
             }
           } catch (e) {
             console.error('SSE JSON parse error', e);

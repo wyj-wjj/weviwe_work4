@@ -203,7 +203,7 @@ def normalize_split_suggestions(
             item,
             content_type=str(suggested_type),
             file_name=f"draft-{index}",
-            raw_text=_string(item.get("body")) or raw_text,
+            raw_text=_string(item.get("body")),
         )
         source_span = item.get("source_span") if isinstance(item.get("source_span"), dict) else {}
         confidence = item.get("confidence")
@@ -221,7 +221,64 @@ def normalize_split_suggestions(
                 confidence=confidence,
             )
         )
+    _fill_split_bodies(suggestions, raw_text)
+
+    # If after filling, most splits still have empty body, discard LLM metadata
+    # and let suggest_split_suggestions fallback handle it.
+    filled_count = sum(1 for s in suggestions if s.body.strip())
+    if suggestions and filled_count < len(suggestions) / 2:
+        return []
+
     return finalize_split_suggestions(suggestions)
+
+
+def _fill_split_bodies(suggestions: list[ImportSplitSuggestion], raw_text: str) -> None:
+    """Fill empty split bodies by matching LLM split titles against local section headings."""
+    empty_count = sum(1 for s in suggestions if not s.body.strip())
+    if empty_count == 0:
+        return
+
+    sections = conservative_sections(raw_text)
+    meaningful = [s for s in sections if len(s) > 120]
+
+    if len(meaningful) < 2:
+        return
+
+    available = list(meaningful)
+    used = [False] * len(available)
+
+    for suggestion in suggestions:
+        if suggestion.body.strip():
+            continue
+        title = suggestion.title.strip()
+        if not title:
+            continue
+
+        # Title-based matching: find a local section whose first line
+        # contains the split title or vice versa.
+        matched_idx = None
+        for idx, section in enumerate(available):
+            if used[idx]:
+                continue
+            first_line = section.splitlines()[0].strip() if section.splitlines() else ""
+            if not first_line:
+                continue
+            if title in first_line or first_line in title:
+                matched_idx = idx
+                break
+
+        if matched_idx is not None:
+            suggestion.body = available[matched_idx]
+            used[matched_idx] = True
+
+    # Fallback: for splits that still have no body, use remaining
+    # unmatched local sections in order.
+    remaining = [s for i, s in enumerate(available) if not used[i]]
+    if remaining:
+        for suggestion in suggestions:
+            if not suggestion.body.strip():
+                if remaining:
+                    suggestion.body = remaining.pop(0)
 
 
 def suggest_split_suggestions(

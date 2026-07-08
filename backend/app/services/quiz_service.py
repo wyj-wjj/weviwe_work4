@@ -69,7 +69,10 @@ def quiz_source_invalid_reason(question: QuizQuestion) -> str | None:
         return "source_content_inactive"
     if content.current_version_id is None:
         return "source_content_no_current_version"
+    current_version = content.current_version
     if question.related_version_id is not None and question.related_version_id != content.current_version_id:
+        if current_version is not None and current_version.update_level == UpdateLevel.MINOR.value:
+            return None
         return "source_version_stale"
     if question.set_items and not any(
         item.quiz_set is not None and item.quiz_set.status == QuizSetStatus.ACTIVE.value
@@ -141,7 +144,7 @@ def get_quiz_or_404(db: Session, question_id: int) -> QuizQuestion:
     question = db.execute(
         select(QuizQuestion)
         .options(
-            joinedload(QuizQuestion.related_content),
+            joinedload(QuizQuestion.related_content).joinedload(Content.current_version),
             joinedload(QuizQuestion.set_items).joinedload(QuizQuestionSetItem.quiz_set),
         )
         .where(QuizQuestion.id == question_id)
@@ -244,7 +247,7 @@ def list_quiz_questions(db: Session, *, page: int = 1, page_size: int = 20) -> t
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     items = db.scalars(
         stmt.options(
-            joinedload(QuizQuestion.related_content),
+            joinedload(QuizQuestion.related_content).joinedload(Content.current_version),
             joinedload(QuizQuestion.set_items).joinedload(QuizQuestionSetItem.quiz_set),
         )
         .order_by(QuizQuestion.updated_at.desc())
@@ -399,6 +402,7 @@ def visible_related_content_filter(visible_content_levels: set[str], user: User)
             or_(
                 QuizQuestion.related_version_id.is_(None),
                 QuizQuestion.related_version_id == Content.current_version_id,
+                ContentVersion.update_level == UpdateLevel.MINOR.value,
             ),
         ),
     )
@@ -640,7 +644,11 @@ def deactivate_stale_quiz_sets_for_content(
     *,
     content_id: int,
     current_version_id: int,
+    update_level: str | None = None,
 ) -> None:
+    if update_level == UpdateLevel.MINOR.value:
+        return
+
     quiz_sets = db.scalars(
         select(QuizSet)
         .where(QuizSet.related_content_id == content_id)

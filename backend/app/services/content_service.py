@@ -239,7 +239,8 @@ def mark_related_quiz_questions_for_review(
     ).all()
     for question in questions:
         if question.related_version_id is not None and question.related_version_id != version.id:
-            mark_question_source_invalid(question, reason=stale_reason)
+            if update_level != UpdateLevel.MINOR.value:
+                mark_question_source_invalid(question, reason=stale_reason)
             continue
         if not should_mark_current_review:
             continue
@@ -330,6 +331,7 @@ def publish_content(
         db,
         content_id=content.id,
         current_version_id=version.id,
+        update_level=update_level_value,
     )
 
     from app.services.rag_index_service import replace_chunks_for_version

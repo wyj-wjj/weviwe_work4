@@ -55,9 +55,13 @@ watch(
         },
         onDone: () => {
           state.value = 'ready'
-        }
+        },
+        onDebug: (stage, data) => {
+          console.log(`[RAG-DEBUG] ${stage}:`, data)
+        },
       },
-      controller.signal
+      controller.signal,
+      true,
     )
   },
   { immediate: true },

@@ -18,30 +18,29 @@ QUERY_EXPANSIONS = (
     (("电池能用多少次", "能循环多少次"), "电池循环寿命 充放电循环次数"),
     (("项目环境影响", "环境影响", "环评"), "储能项目环境影响评价 环评 合规 噪声 危废 防火间距"),
 )
-RELATIVE_SCORE_WINDOW = 0.12
-KEYWORD_SEARCH_BASE_SCORE = 0.68
-KEYWORD_SEARCH_MAX_SCORE = 0.95
-KEYWORD_SEARCH_FETCH_MULTIPLIER = 4
-GENERIC_QUERY_PARTS = (
-    "相关",
-    "话术",
-    "标准",
-    "内容",
-    "资料",
-    "口径",
-    "怎么",
-    "如何",
-    "什么",
-    "哪些",
-    "要求",
-    "客户",
-    "项目",
-    "储能",
-    "一下",
-    "请问",
-    "？",
-    "?",
-)
+KEYWORD_SEARCH_BASE_SCORE = 0.55
+KEYWORD_SEARCH_MAX_SCORE = 0.75
+KEYWORD_SEARCH_FETCH_MULTIPLIER = 10
+KEYWORD_SEARCH_MIN_TERM_MATCHES = 2
+KEYWORD_STOP_WORDS: frozenset[str] = frozenset({
+    # structural particles
+    "的", "了", "是", "在", "有", "和", "就", "都",
+    "也", "还", "但", "而", "与", "从", "到", "对",
+    "向", "比", "用", "给", "被", "把", "让", "叫",
+    "因", "为", "所", "以", "可", "能", "会", "着",
+    "过", "则", "若", "且", "非", "不",
+    # question / generic words
+    "怎么", "如何", "什么", "哪些", "怎么样", "怎么办",
+    "为什么", "之所以", "多少", "多长", "多重", "多宽",
+    "多高", "多久", "多大", "哪里", "哪个", "哪种",
+    "可否", "能否",
+    # common filler
+    "相关", "话术", "标准", "内容", "资料", "口径",
+    "要求", "客户", "项目", "一下", "请问",
+    # single chars that jieba may still emit
+    "？", "?", "，", ",", "。", ".", "、",
+    "：", ":", "；", ";", "！", "!",
+})
 KEYWORD_EXPANSIONS = (
     (("消防", "灭火", "烟感", "温感"), ("消防", "消防配置", "消防验收", "消防安全", "烟感", "温感", "气体灭火", "消防报告", "保险")),
     (("并网",), ("并网", "并网接入", "接入流程", "并网验收", "电网公司", "并网周期")),
@@ -65,27 +64,31 @@ def retrieval_question(question: str) -> str:
 
 
 def keyword_terms_for_question(question: str) -> list[str]:
+    import jieba
+
     normalized = question.strip()
     terms: list[str] = []
+
+    # 1. Domain synonym expansion (KEYWORD_EXPANSIONS)
     for triggers, expansion_terms in KEYWORD_EXPANSIONS:
         if any(trigger in normalized for trigger in triggers):
             terms.extend(expansion_terms)
 
-    cleaned = normalized
-    for part in GENERIC_QUERY_PARTS:
-        cleaned = cleaned.replace(part, " ")
-    terms.extend(term for term in cleaned.split() if len(term) >= 2)
+    # 2. jieba segmentation → filter stop words → keep ≥ 2 chars
+    words = [w.strip() for w in jieba.cut(normalized) if len(w.strip()) >= 2]
+    terms.extend(w for w in words if w not in KEYWORD_STOP_WORDS)
 
+    # 3. Deduplicate, prefer longer terms first
     unique_terms: list[str] = []
     seen: set[str] = set()
-    for term in sorted((term.strip() for term in terms), key=len, reverse=True):
+    for term in sorted((t.strip() for t in terms), key=len, reverse=True):
         if term and term not in seen:
             seen.add(term)
             unique_terms.append(term)
     return unique_terms
 
 
-def keyword_match_score(chunk: ContentChunk, *, terms: list[str], question: str) -> float:
+def keyword_match_score(chunk: ContentChunk, *, terms: list[str], question: str) -> tuple[float, int]:
     title = chunk.version.title or ""
     category = chunk.content.category or ""
     text = chunk.chunk_text or ""
@@ -94,22 +97,22 @@ def keyword_match_score(chunk: ContentChunk, *, terms: list[str], question: str)
     for term in terms:
         term_score = 0.0
         if term in title:
-            term_score += 0.24
+            term_score += 0.15
         if category and term in category:
-            term_score += 0.16
+            term_score += 0.10
         if term in text:
-            term_score += 0.12
+            term_score += 0.05
         if term_score:
             matched_terms += 1
-            weighted_score += min(term_score, 0.32)
+            weighted_score += min(term_score, 0.20)
     if matched_terms == 0:
-        return 0.0
+        return 0.0, 0
 
     if "话术" in question and chunk.content.content_type in {"base_script", "standard_script"}:
-        weighted_score += 0.08
+        weighted_score += 0.03
     if any(len(term) >= 4 and (term in title or term in text) for term in terms):
-        weighted_score += 0.04
-    return min(KEYWORD_SEARCH_MAX_SCORE, KEYWORD_SEARCH_BASE_SCORE + weighted_score + matched_terms * 0.02)
+        weighted_score += 0.02
+    return min(KEYWORD_SEARCH_MAX_SCORE, KEYWORD_SEARCH_BASE_SCORE + weighted_score + matched_terms * 0.01), matched_terms
 
 
 def keyword_search_hits(
@@ -149,8 +152,8 @@ def keyword_search_hits(
     )
     scored_hits: list[MilvusSearchHit] = []
     for chunk in db.scalars(stmt).all():
-        score = keyword_match_score(chunk, terms=terms, question=question)
-        if score <= 0:
+        score, matched = keyword_match_score(chunk, terms=terms, question=question)
+        if score <= 0 or matched < KEYWORD_SEARCH_MIN_TERM_MATCHES:
             continue
         scored_hits.append(
             MilvusSearchHit(
@@ -171,19 +174,38 @@ def keyword_search_hits(
     return sorted(scored_hits, key=lambda hit: hit.score, reverse=True)[:top_k]
 
 
-def merge_retrieval_hits(*hit_groups: list[MilvusSearchHit]) -> list[MilvusSearchHit]:
-    hits_by_chunk_id: dict[int, MilvusSearchHit] = {}
-    passthrough_hits: list[MilvusSearchHit] = []
-    for hits in hit_groups:
-        for hit in hits:
-            chunk_id = hit.metadata.get("chunk_id")
-            if not isinstance(chunk_id, int):
-                passthrough_hits.append(hit)
-                continue
-            existing = hits_by_chunk_id.get(chunk_id)
-            if existing is None or hit.score > existing.score:
-                hits_by_chunk_id[chunk_id] = hit
-    return sorted([*hits_by_chunk_id.values(), *passthrough_hits], key=lambda hit: hit.score, reverse=True)
+VECTOR_RESULT_SLOTS = 6
+KEYWORD_RESULT_SLOTS = 4
+
+
+def interleave_retrieval_hits(
+    vector_hits: list[MilvusSearchHit],
+    keyword_hits: list[MilvusSearchHit],
+) -> list[MilvusSearchHit]:
+    """Slot-based interleaving: vector first, keyword second, dedup by chunk_id."""
+    vec_sorted = sorted(vector_hits, key=lambda h: h.score, reverse=True)
+    kw_sorted = sorted(keyword_hits, key=lambda h: h.score, reverse=True)
+
+    seen_chunk_ids: set[int] = set()
+    interleaved: list[MilvusSearchHit] = []
+
+    for hit in vec_sorted[:VECTOR_RESULT_SLOTS]:
+        chunk_id = hit.metadata.get("chunk_id")
+        if isinstance(chunk_id, int):
+            seen_chunk_ids.add(chunk_id)
+        interleaved.append(hit)
+
+    for hit in kw_sorted:
+        if len(interleaved) >= VECTOR_RESULT_SLOTS + KEYWORD_RESULT_SLOTS:
+            break
+        chunk_id = hit.metadata.get("chunk_id")
+        if isinstance(chunk_id, int) and chunk_id in seen_chunk_ids:
+            continue
+        if isinstance(chunk_id, int):
+            seen_chunk_ids.add(chunk_id)
+        interleaved.append(hit)
+
+    return interleaved
 
 
 def source_from_chunk(chunk: ContentChunk, *, relevance_score: float) -> dict[str, Any]:
@@ -236,8 +258,7 @@ def load_authorized_contexts(
     contexts_by_content_id: dict[int, dict[str, Any]] = {}
     seen_texts_by_content_id: dict[int, set[str]] = {}
     seen_chunk_ids: set[int] = set()
-    best_authorized_score: float | None = None
-    for hit in sorted(hits, key=lambda item: item.score, reverse=True):
+    for hit in hits:
         if hit.score < min_score:
             continue
         chunk_id = hit.metadata.get("chunk_id")
@@ -255,10 +276,6 @@ def load_authorized_contexts(
             or not scope_is_visible(user, content.scope_type, content.department_id)
             or not scope_is_visible(user, chunk.scope_type, chunk.department_id)
         ):
-            continue
-        if best_authorized_score is None:
-            best_authorized_score = hit.score
-        if hit.score < best_authorized_score - RELATIVE_SCORE_WINDOW:
             continue
 
         existing_context = contexts_by_content_id.get(content.id)
@@ -299,10 +316,20 @@ def answer_question(
     dashscope_client,
     milvus_client,
     settings: Settings | None = None,
+    debug: bool = False,
 ):
     resolved_settings = settings or Settings()
+
+    # ---------- debug: log terms ----------
+    if debug:
+        import jieba  # noqa: F811
+        raw_terms = [w for w in jieba.cut(question.strip()) if len(w.strip()) >= 2]
+        clean_terms = keyword_terms_for_question(question)
+        yield f"data: {json.dumps({'type': 'debug', 'stage': 'terms', 'raw_jieba': raw_terms, 'final_terms': clean_terms})}\n\n"
+
     try:
-        question_embedding = dashscope_client.embed_text(retrieval_question(question))
+        expanded_q = retrieval_question(question)
+        question_embedding = dashscope_client.embed_text(expanded_q)
         vector_hits = milvus_client.search(
             resolved_settings.milvus_collection_name,
             query_vector=question_embedding.vector,
@@ -315,19 +342,48 @@ def answer_question(
         yield f"data: {json.dumps({'type': 'error', 'message': '智能问答暂不可用，请稍后重试。'})}\n\n"
         return
 
+    # ---------- debug: vector hits ----------
+    if debug:
+        vec_hits_debug = [{"chunk_id": h.metadata.get("chunk_id"), "score": round(h.score, 4), "path": "vector"} for h in vector_hits]
+        yield f"data: {json.dumps({'type': 'debug', 'stage': 'vector_hits', 'count': len(vector_hits), 'hits': vec_hits_debug})}\n\n"
+
     keyword_hits = keyword_search_hits(
         db,
         question=question,
         user=user,
         top_k=resolved_settings.rag_top_k,
     )
-    hits = merge_retrieval_hits(vector_hits, keyword_hits)
+
+    # ---------- debug: keyword hits ----------
+    if debug:
+        kw_hits_debug = [{"chunk_id": h.metadata.get("chunk_id"), "score": round(h.score, 4), "path": "keyword"} for h in keyword_hits]
+        yield f"data: {json.dumps({'type': 'debug', 'stage': 'keyword_hits', 'count': len(keyword_hits), 'hits': kw_hits_debug})}\n\n"
+
+    hits = interleave_retrieval_hits(vector_hits, keyword_hits)
+
+    # ---------- debug: merged hits ----------
+    if debug:
+        merged_debug = [{"chunk_id": h.metadata.get("chunk_id"), "score": round(h.score, 4), "path": h.metadata.get("retrieval_path", "vector")} for h in hits]
+        yield f"data: {json.dumps({'type': 'debug', 'stage': 'merged_hits', 'count': len(hits), 'hits': merged_debug})}\n\n"
+
     contexts = load_authorized_contexts(
         db,
         hits=hits,
         user=user,
         min_score=resolved_settings.rag_similarity_threshold,
     )
+
+    # ---------- debug: final contexts ----------
+    if debug:
+        ctx_debug = [{
+            "chunk_id": c["source"].get("chunk_id"),
+            "content_id": c["source"].get("content_id"),
+            "title": c["source"].get("title"),
+            "score": c["source"].get("relevance_score"),
+            "text_preview": c["text"][:200] if c.get("text") else "(empty)",
+        } for c in contexts]
+        yield f"data: {json.dumps({'type': 'debug', 'stage': 'contexts', 'threshold': resolved_settings.rag_similarity_threshold, 'count': len(contexts), 'contexts': ctx_debug}, default=str, ensure_ascii=False)}\n\n"
+
     if not contexts:
         record_missed_question(db, question=question, user=user)
         yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"

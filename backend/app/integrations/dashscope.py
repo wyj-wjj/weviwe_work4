@@ -219,7 +219,7 @@ def _content_import_contract_prompt(content_type: str) -> str:
             "- summary: 120个中文字符以内的高度概括摘要。\n"
             "- body: 必须100%保留输入文本的原始正文内容，仅做换行和排版格式上的整理，绝对禁止对正文进行任何删减、缩写或概括提炼。\n"
             "- points: 提取3-5个最关键的底层逻辑要点（字符串数组）。\n"
-            "- split_suggestions: 将正文按逻辑独立性拆分为多个片段（如：各个独立的问答对、各独立的业务章节）。每个片段包含 title、summary、body 和 points。每个片段的 body 也必须100%保留对应原文，严禁概括。"
+            "- split_suggestions: 将正文按逻辑独立性拆分为多个片段（如：各个独立的问答对、各独立的业务章节）。每个片段只需包含 title、summary 和 points。不要输出 body，后端会自动从原文中截取对应的文本段落填充到每个拆分中。"
         )
     elif content_type == "standard_script":
         return shared + (
@@ -230,7 +230,7 @@ def _content_import_contract_prompt(content_type: str) -> str:
             "- body: 必须100%保留输入文本的原始正文内容，仅做换行和排版格式上的整理，绝对禁止对正文进行任何删减、缩写或概括提炼。\n"
             "- recommended_speech: 提炼出的最直接、可直接说给客户听的推荐原话（如果没有则为空）。\n"
             "- scene: 该话术适用的具体业务场景。\n"
-            "- split_suggestions: 如果原文包含多个不同的场景或多个独立的问答对，请将其拆分为多个独立的片段。每个片段包含 title、summary、body、recommended_speech 和 scene。每个片段的 body 也必须100%保留对应原文，严禁概括。"
+            "- split_suggestions: 如果原文包含多个不同的场景或多个独立的问答对，请将其拆分为多个独立的片段。每个片段只需包含 title、summary、recommended_speech 和 scene。不要输出 body，后端会自动从原文中截取对应的文本段落填充到每个拆分中。"
         )
     return shared
 
