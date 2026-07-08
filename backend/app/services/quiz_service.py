@@ -52,7 +52,11 @@ def visible_related_content(question: QuizQuestion, user: User) -> Content | Non
     ):
         return None
     if question.related_version_id is not None and question.related_version_id != content.current_version_id:
-        return None
+        current_version = content.current_version
+        if current_version is not None and current_version.update_level == UpdateLevel.MINOR.value:
+            pass
+        else:
+            return None
     return content
 
 
@@ -530,7 +534,8 @@ def get_employee_quiz_questions_by_ids(
     stmt = (
         select(QuizQuestion)
         .outerjoin(Content, QuizQuestion.related_content_id == Content.id)
-        .options(joinedload(QuizQuestion.related_content))
+        .outerjoin(ContentVersion, Content.current_version_id == ContentVersion.id)
+        .options(joinedload(QuizQuestion.related_content).joinedload(Content.current_version))
         .where(QuizQuestion.id.in_(requested_ids))
         .where(QuizQuestion.status == QuestionStatus.ENABLED.value)
         .where(QuizQuestion.review_status == QuizReviewStatus.APPROVED.value)
