@@ -91,7 +91,8 @@ jobs:
             echo "[4/8] Replace backend and frontend artifacts"
             rm -rf "$APP_DIR/backend/app"
             rm -rf "$APP_DIR/backend/alembic"
-            rm -rf "$APP_DIR/frontend/dist"
+            mkdir -p "$APP_DIR/frontend/dist"
+            find "$APP_DIR/frontend/dist" -mindepth 1 ! -name '.user.ini' -exec rm -rf {} +
 
             cp -a "$TMP_DIR/backend/." "$APP_DIR/backend/"
             cp -a "$TMP_DIR/frontend/." "$APP_DIR/frontend/"
