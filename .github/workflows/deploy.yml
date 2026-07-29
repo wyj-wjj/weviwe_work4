@@ -1,0 +1,109 @@
+name: Deploy WeView
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: weview-production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: VITE_API_BASE_URL=/api pnpm build
+
+      - name: Package release
+        run: |
+          mkdir -p release/backend release/frontend
+
+          cp -r backend/app release/backend/app
+          cp -r backend/alembic release/backend/alembic
+          cp backend/alembic.ini release/backend/alembic.ini
+          cp backend/pyproject.toml release/backend/pyproject.toml
+
+          cp -r frontend/dist release/frontend/dist
+
+          tar -czf weview-release.tgz -C release .
+
+      - name: Upload release package
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: weview-release.tgz
+          target: /tmp
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            APP_DIR="/www/wwwroot/weview-repo"
+            TMP_DIR="/tmp/weview-release"
+
+            echo "[1/8] Prepare directories"
+            rm -rf "$TMP_DIR"
+            mkdir -p "$TMP_DIR"
+            mkdir -p "$APP_DIR/backend"
+            mkdir -p "$APP_DIR/frontend"
+
+            echo "[2/8] Extract release package"
+            tar -xzf /tmp/weview-release.tgz -C "$TMP_DIR"
+
+            echo "[3/8] Check server-only files"
+            test -f "$APP_DIR/.env"
+            test -d "$APP_DIR/.venv"
+
+            echo "[4/8] Replace backend and frontend artifacts"
+            rm -rf "$APP_DIR/backend/app"
+            rm -rf "$APP_DIR/backend/alembic"
+            rm -rf "$APP_DIR/frontend/dist"
+
+            cp -a "$TMP_DIR/backend/." "$APP_DIR/backend/"
+            cp -a "$TMP_DIR/frontend/." "$APP_DIR/frontend/"
+
+            echo "[5/8] Ensure backend .env symlink"
+            ln -sf "$APP_DIR/.env" "$APP_DIR/backend/.env"
+
+            echo "[6/8] Install backend dependencies and migrate database"
+            cd "$APP_DIR/backend"
+            "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR/backend"
+            "$APP_DIR/.venv/bin/python" -m alembic upgrade head
+
+            echo "[7/8] Restart backend"
+            sudo systemctl restart weview-api
+
+            echo "[8/8] Health check"
+            curl -f http://127.0.0.1:8000/health
+
+            echo "Deploy complete"
