@@ -797,8 +797,16 @@ jobs:
             echo "[5/8] Ensure backend .env symlink"
             ln -sf "$APP_DIR/.env" "$APP_DIR/backend/.env"
 
-            echo "[6/8] Install backend dependencies and migrate database"
+            echo "[6/8] Check Python runtime, install backend dependencies and migrate database"
             cd "$APP_DIR/backend"
+            "$APP_DIR/.venv/bin/python" - <<'PY'
+import sys
+
+version = sys.version_info
+print(f"Python runtime: {sys.version}")
+if not ((3, 11) <= (version.major, version.minor) < (3, 14)):
+    raise SystemExit("Python runtime must be >=3.11 and <3.14.")
+PY
             "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR/backend"
             "$APP_DIR/.venv/bin/python" -m alembic upgrade head
 
@@ -1238,7 +1246,89 @@ git commit -m "Fix pnpm lockfile registry for deployment workflow"
 git push origin main
 ```
 
-### 11. Alembic 迁移失败
+### 11. `pip install -e backend` 报 Python 版本不匹配
+
+如果 Actions 日志显示：
+
+```text
+ERROR: Package 'weview-work4-backend' requires a different Python: 3.11.6 not in '<3.14,>=3.12'
+```
+
+这说明当时提交到 GitHub 的 `backend/pyproject.toml` 仍要求：
+
+```text
+Python >=3.12,<3.14
+```
+
+而服务器 `/www/wwwroot/weview-repo/.venv` 是用 Python 3.11.6 创建的。
+
+如果你选择保持推荐运行时，修复方式是在服务器上用 Python 3.12 或 3.13 重建 `.venv`，不要在旧的 Python 3.11 虚拟环境里继续装依赖。
+
+先确认服务器有没有 Python 3.13：
+
+```bash
+which python3.13
+python3.13 --version
+```
+
+如果能看到类似 `Python 3.13.x`，执行：
+
+```bash
+cd /www/wwwroot/weview-repo
+systemctl stop weview-api
+mv .venv .venv-py311-backup-$(date +%Y%m%d%H%M%S)
+python3.13 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip config set global.index-url https://mirrors.tencent.com/pypi/simple
+.venv/bin/pip install -e /www/wwwroot/weview-repo/backend
+cd /www/wwwroot/weview-repo/backend
+/www/wwwroot/weview-repo/.venv/bin/python -m alembic upgrade head
+systemctl restart weview-api
+curl -f http://127.0.0.1:8000/health
+```
+
+如果服务器没有 `python3.13`，先查可用版本：
+
+```bash
+python3 --version
+python3.12 --version
+python3.13 --version
+ls -l /usr/bin/python3*
+```
+
+只要有 Python `3.12.x` 或 `3.13.x` 都可以，例如有 `python3.12` 时：
+
+```bash
+cd /www/wwwroot/weview-repo
+systemctl stop weview-api
+mv .venv .venv-py311-backup-$(date +%Y%m%d%H%M%S)
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip config set global.index-url https://mirrors.tencent.com/pypi/simple
+.venv/bin/pip install -e /www/wwwroot/weview-repo/backend
+cd /www/wwwroot/weview-repo/backend
+/www/wwwroot/weview-repo/.venv/bin/python -m alembic upgrade head
+systemctl restart weview-api
+curl -f http://127.0.0.1:8000/health
+```
+
+修复后再到 GitHub Actions 点最新任务，或重新 push 一次触发部署。
+
+如果你明确决定允许现有 Python 3.11.6 运行，可以把：
+
+```text
+backend/pyproject.toml
+```
+
+中的要求放宽为：
+
+```toml
+requires-python = ">=3.11,<3.14"
+```
+
+并同步把 `.github/workflows/deploy.yml` 中的服务器 Python 预检改为 `>=3.11,<3.14`。当前文档和 workflow 已按这个放宽策略处理，因此服务器现有 Python 3.11.6 不会再被该版本检查拦住。
+
+### 12. Alembic 迁移失败
 
 先看 Actions 日志中的具体错误。
 

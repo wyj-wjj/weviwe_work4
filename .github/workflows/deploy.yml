@@ -99,8 +99,16 @@ jobs:
             echo "[5/8] Ensure backend .env symlink"
             ln -sf "$APP_DIR/.env" "$APP_DIR/backend/.env"
 
-            echo "[6/8] Install backend dependencies and migrate database"
+            echo "[6/8] Check Python runtime, install backend dependencies and migrate database"
             cd "$APP_DIR/backend"
+            "$APP_DIR/.venv/bin/python" - <<'PY'
+import sys
+
+version = sys.version_info
+print(f"Python runtime: {sys.version}")
+if not ((3, 11) <= (version.major, version.minor) < (3, 14)):
+    raise SystemExit("Python runtime must be >=3.11 and <3.14.")
+PY
             "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR/backend"
             "$APP_DIR/.venv/bin/python" -m alembic upgrade head
 
