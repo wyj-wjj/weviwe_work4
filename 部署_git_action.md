@@ -727,6 +727,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
+      - name: Configure pnpm registry
+        working-directory: frontend
+        run: pnpm config set registry https://registry.npmmirror.com
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
@@ -842,6 +846,29 @@ VITE_API_BASE_URL=/api pnpm build
 ```
 
 这样服务器不用安装前端依赖或运行构建，减少服务器压力。
+
+本项目当前 `frontend/pnpm-lock.yaml` 中的依赖 tarball URL 来自：
+
+```text
+https://registry.npmmirror.com
+```
+
+因此 workflow 在安装前端依赖前必须执行：
+
+```yaml
+      - name: Configure pnpm registry
+        working-directory: frontend
+        run: pnpm config set registry https://registry.npmmirror.com
+```
+
+否则 GitHub Actions 默认使用 `https://registry.npmjs.org`，pnpm 11 会进行供应链校验并报错：
+
+```text
+ERR_PNPM_TARBALL_URL_MISMATCH
+Lockfile failed supply-chain policy check
+```
+
+这个错误不是 SSH 配置问题，也不是服务器问题；它发生在 GitHub runner 安装前端依赖阶段。根因是 lockfile 记录的 tarball 域名与当前 registry 不一致。
 
 ### 4. 只上传运行必需文件
 
@@ -1160,7 +1187,42 @@ alembic.ini
 
 如果缺少，说明 GitHub Actions 打包或解压步骤失败。
 
-### 10. Alembic 迁移失败
+### 10. `pnpm install --frozen-lockfile` 报 `ERR_PNPM_TARBALL_URL_MISMATCH`
+
+Actions 日志可能显示：
+
+```text
+Lockfile failed supply-chain policy check
+[ERR_PNPM_TARBALL_URL_MISMATCH]
+```
+
+原因：
+
+```text
+frontend/pnpm-lock.yaml 中记录的是 registry.npmmirror.com 的 tarball
+但 GitHub Actions 默认 registry 是 registry.npmjs.org
+pnpm 11 供应链校验发现两者不一致，所以拒绝安装
+```
+
+修复：
+
+在 `.github/workflows/deploy.yml` 的 `Setup Node` 后、`Install frontend dependencies` 前增加：
+
+```yaml
+      - name: Configure pnpm registry
+        working-directory: frontend
+        run: pnpm config set registry https://registry.npmmirror.com
+```
+
+然后提交并推送：
+
+```bat
+git add .github/workflows/deploy.yml 部署_git_action.md
+git commit -m "Fix pnpm registry for deployment workflow"
+git push origin main
+```
+
+### 11. Alembic 迁移失败
 
 先看 Actions 日志中的具体错误。
 
@@ -1251,4 +1313,3 @@ GitHub 会自动部署到服务器。
 不要手动修改服务器上的 /www/wwwroot/weview-repo/backend 和 frontend/dist。
 不要把 .env、数据库密码、DashScope Key 提交到 GitHub。
 ```
-

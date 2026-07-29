@@ -29,6 +29,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
+      - name: Configure pnpm registry
+        working-directory: frontend
+        run: pnpm config set registry https://registry.npmmirror.com
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
