@@ -799,14 +799,7 @@ jobs:
 
             echo "[6/8] Check Python runtime, install backend dependencies and migrate database"
             cd "$APP_DIR/backend"
-            "$APP_DIR/.venv/bin/python" - <<'PY'
-import sys
-
-version = sys.version_info
-print(f"Python runtime: {sys.version}")
-if not ((3, 11) <= (version.major, version.minor) < (3, 14)):
-    raise SystemExit("Python runtime must be >=3.11 and <3.14.")
-PY
+            "$APP_DIR/.venv/bin/python" -c 'import sys; print("Python runtime:", sys.version); raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else "Python runtime must be >=3.11 and <3.14.")'
             "$APP_DIR/.venv/bin/pip" install -e "$APP_DIR/backend"
             "$APP_DIR/.venv/bin/python" -m alembic upgrade head
 
