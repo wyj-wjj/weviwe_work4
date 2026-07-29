@@ -98,6 +98,11 @@ jobs:
 
             echo "[5/8] Ensure backend .env symlink"
             ln -sf "$APP_DIR/.env" "$APP_DIR/backend/.env"
+            SERVICE_USER="$(systemctl show -p User --value weview-api 2>/dev/null || true)"
+            if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != "root" ] && [ "$(id -u)" -eq 0 ]; then
+              chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/.env"
+              chmod 600 "$APP_DIR/.env"
+            fi
 
             echo "[6/8] Check Python runtime, install backend dependencies and migrate database"
             cd "$APP_DIR/backend"

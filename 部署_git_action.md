@@ -796,6 +796,11 @@ jobs:
 
             echo "[5/8] Ensure backend .env symlink"
             ln -sf "$APP_DIR/.env" "$APP_DIR/backend/.env"
+            SERVICE_USER="$(systemctl show -p User --value weview-api 2>/dev/null || true)"
+            if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != "root" ] && [ "$(id -u)" -eq 0 ]; then
+              chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/.env"
+              chmod 600 "$APP_DIR/.env"
+            fi
 
             echo "[6/8] Check Python runtime, install backend dependencies and migrate database"
             cd "$APP_DIR/backend"
@@ -1067,6 +1072,35 @@ SERVER_SSH_KEY 是否填了私钥
 服务器 22 端口是否开放
 公钥是否写入 authorized_keys
 ```
+
+如果 Actions 日志显示：
+
+```text
+drone-scp error: error copy file to dest: xxx, error message: dial tcp xxx:22: i/o timeout
+```
+
+这通常不是私钥填错。它表示 GitHub Actions 运行机器无法连接到云服务器的 SSH 端口。
+
+优先检查：
+
+```text
+1. GitHub Secret `SERVER_HOST` 是否只填服务器公网 IP，例如 124.223.94.16
+2. 云服务器安全组是否放行 TCP 22 入站
+3. 宝塔安全、防火墙、系统 firewalld 是否放行 22
+4. 如果服务器修改过 SSH 端口，workflow 也必须配置同一个端口
+```
+
+如果本地电脑可以 SSH 登录，但 GitHub Actions 超时，最常见原因是安全组只允许了你的本地 IP，或者云厂商防火墙没有对 GitHub Actions 的公网出口放行。
+
+临时验证可以在云服务器安全组中放行：
+
+```text
+协议：TCP
+端口：22
+来源：0.0.0.0/0
+```
+
+验证成功后，如果担心安全，可以再改成更严格的策略；但 GitHub Actions 的出口 IP 会变化，固定白名单维护成本比较高。更稳的长期方案是把 GitHub Actions self-hosted runner 安装到云服务器上，这样服务器主动连 GitHub，不需要 GitHub 反向 SSH 到服务器。
 
 ### 2. 上传成功但部署失败：`.env` 不存在
 
