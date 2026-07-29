@@ -812,7 +812,18 @@ jobs:
             sudo systemctl restart weview-api
 
             echo "[8/8] Health check"
-            curl -f http://127.0.0.1:8000/health
+            for i in {1..30}; do
+              if curl -fsS http://127.0.0.1:8000/health; then
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "Health check failed after 30 seconds"
+                sudo systemctl status weview-api --no-pager -l || true
+                sudo journalctl -u weview-api -n 80 --no-pager || true
+                exit 1
+              fi
+              sleep 1
+            done
 
             echo "Deploy complete"
 ```
