@@ -729,7 +729,7 @@ jobs:
 
       - name: Configure pnpm registry
         working-directory: frontend
-        run: pnpm config set registry https://registry.npmmirror.com
+        run: pnpm config set registry https://registry.npmjs.org
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -847,21 +847,21 @@ VITE_API_BASE_URL=/api pnpm build
 
 这样服务器不用安装前端依赖或运行构建，减少服务器压力。
 
-本项目当前 `frontend/pnpm-lock.yaml` 中的依赖 tarball URL 来自：
+GitHub Actions 当前使用 npm 官方 registry：
 
 ```text
-https://registry.npmmirror.com
+https://registry.npmjs.org
 ```
 
-因此 workflow 在安装前端依赖前必须执行：
+因此 workflow 在安装前端依赖前显式执行：
 
 ```yaml
       - name: Configure pnpm registry
         working-directory: frontend
-        run: pnpm config set registry https://registry.npmmirror.com
+        run: pnpm config set registry https://registry.npmjs.org
 ```
 
-否则 GitHub Actions 默认使用 `https://registry.npmjs.org`，pnpm 11 会进行供应链校验并报错：
+如果本地 lockfile 是用 `https://registry.npmmirror.com` 等镜像源生成的，而 GitHub Actions 使用 `https://registry.npmjs.org`，pnpm 11 会进行供应链校验并报错：
 
 ```text
 ERR_PNPM_TARBALL_URL_MISMATCH
@@ -869,6 +869,13 @@ Lockfile failed supply-chain policy check
 ```
 
 这个错误不是 SSH 配置问题，也不是服务器问题；它发生在 GitHub runner 安装前端依赖阶段。根因是 lockfile 记录的 tarball 域名与当前 registry 不一致。
+
+本项目处理方式：
+
+```text
+frontend/pnpm-lock.yaml 统一提交 registry.npmjs.org tarball
+GitHub Actions 也显式设置 registry.npmjs.org
+```
 
 ### 4. 只上传运行必需文件
 
@@ -1199,26 +1206,35 @@ Lockfile failed supply-chain policy check
 原因：
 
 ```text
-frontend/pnpm-lock.yaml 中记录的是 registry.npmmirror.com 的 tarball
-但 GitHub Actions 默认 registry 是 registry.npmjs.org
+frontend/pnpm-lock.yaml 中记录的 tarball 域名
+与 GitHub Actions 当前使用的 registry 域名不一致
 pnpm 11 供应链校验发现两者不一致，所以拒绝安装
 ```
 
 修复：
 
-在 `.github/workflows/deploy.yml` 的 `Setup Node` 后、`Install frontend dependencies` 前增加：
+1. 确认 `.github/workflows/deploy.yml` 的 `Setup Node` 后、`Install frontend dependencies` 前有：
 
 ```yaml
       - name: Configure pnpm registry
         working-directory: frontend
-        run: pnpm config set registry https://registry.npmmirror.com
+        run: pnpm config set registry https://registry.npmjs.org
 ```
 
-然后提交并推送：
+2. 确认 `frontend/pnpm-lock.yaml` 中没有旧镜像 tarball：
 
 ```bat
-git add .github/workflows/deploy.yml 部署_git_action.md
-git commit -m "Fix pnpm registry for deployment workflow"
+cd /d E:\WeView\work4
+rg "registry.npmmirror.com" frontend\pnpm-lock.yaml
+```
+
+如果还有输出，把 lockfile 统一更新为 npm 官方 registry。
+
+3. 提交并推送：
+
+```bat
+git add .github/workflows/deploy.yml frontend/pnpm-lock.yaml 部署_git_action.md
+git commit -m "Fix pnpm lockfile registry for deployment workflow"
 git push origin main
 ```
 

@@ -31,7 +31,7 @@ jobs:
 
       - name: Configure pnpm registry
         working-directory: frontend
-        run: pnpm config set registry https://registry.npmmirror.com
+        run: pnpm config set registry https://registry.npmjs.org
 
       - name: Install frontend dependencies
         working-directory: frontend
